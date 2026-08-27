@@ -55,11 +55,16 @@ public final class EventTap {
         /// Two solo taps inside the double-tap window.
         case doubleTap
         case escape
+        /// A number key 1-4 while the picker is open.
+        case digit(Int)
+        /// Any other typing while the picker is open -- get out of the way.
+        case dismiss
     }
 
-    /// Set to true while the panel is open, so `esc` gets swallowed instead of
-    /// reaching the app underneath. Read synchronously inside the callback.
-    public var wantsEscape = false
+    /// True while the picker is open. Number keys and `esc` are then swallowed
+    /// and delivered to the panel, which cannot receive them itself because it
+    /// never takes focus. Read synchronously inside the callback.
+    public var wantsPanelKeys = false
 
     public let trigger: TriggerKey
 
@@ -70,6 +75,9 @@ public final class EventTap {
     private let onSignal: (Signal) -> Void
 
     private static let escapeKeyCode: Int64 = 53
+
+    /// Virtual key codes for the digits 1 through 4.
+    private static let digitKeyCodes: [Int64: Int] = [18: 1, 19: 2, 20: 3, 21: 4]
 
     public init(trigger: TriggerKey = .command, onSignal: @escaping (Signal) -> Void) {
         self.trigger = trigger
@@ -180,9 +188,29 @@ public final class EventTap {
         case .keyDown:
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
 
-            if wantsEscape && keyCode == Self.escapeKeyCode {
-                emit(.escape)
-                return nil  // swallow, so esc does not also reach the app below
+            if wantsPanelKeys {
+                let hasModifier = event.flags.contains(.maskCommand)
+                    || event.flags.contains(.maskControl)
+                    || event.flags.contains(.maskAlternate)
+
+                if keyCode == Self.escapeKeyCode {
+                    emit(.escape)
+                    return nil  // swallow, so esc does not also reach the app below
+                }
+
+                // Bare 1-4 picks an option. With a modifier held it is a real
+                // shortcut (⌘1 switches tabs) and must pass through untouched.
+                if !hasModifier, let digit = Self.digitKeyCodes[keyCode] {
+                    emit(.digit(digit))
+                    return nil
+                }
+
+                // Anything else means the user moved on. Close the picker, but
+                // let the keystroke through -- swallowing it would eat a
+                // character out of what they are typing.
+                emit(.dismiss)
+                _ = monitor.handle(.keyDown)
+                return Unmanaged.passUnretained(event)
             }
 
             _ = monitor.handle(.keyDown)

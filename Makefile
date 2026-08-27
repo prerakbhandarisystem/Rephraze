@@ -32,8 +32,33 @@ uninstall:
 cert:
 	@./scripts/make-cert.sh
 
-## Run unit tests.
+## One-time: stop macOS asking for your password on every build.
 ##
+## macOS needs TWO grants before codesign may use a signing key:
+##   1. the ACL          -- set by `security import -T /usr/bin/codesign`
+##   2. the partition list -- a separate, newer mechanism, set here
+## Without (2), codesign shows a password dialog on every single build.
+##
+## You will be asked for your login password ONCE, in the terminal.
+trust-key:
+	@echo "codesign needs one-time permission to use your signing key."
+	@echo "Type your Mac login password below. This happens once, ever."
+	@echo
+	@security set-key-partition-list \
+		-S apple-tool:,apple:,codesign: \
+		-s $(HOME)/Library/Keychains/login.keychain-db >/dev/null 2>&1 \
+		&& echo "Done. No more password prompts." \
+		|| echo "Did not apply. Next time codesign asks, click 'Always Allow'."
+	@echo
+	@printf "Verifying... "
+	@probe=$$(mktemp); cp /bin/echo $$probe; \
+	start=$$(date +%s); \
+	codesign --force --sign "Rephraze Dev" --timestamp=none $$probe >/dev/null 2>&1; \
+	elapsed=$$(( $$(date +%s) - $$start )); \
+	rm -f $$probe; \
+	if [ $$elapsed -le 1 ]; then echo "instant - fixed."; \
+	else echo "still took $${elapsed}s - a prompt is still appearing."; fi
+
 ## Xcode is not installed here, so XCTest does not exist. We use swift-testing,
 ## which ships inside Command Line Tools -- but not on any default search path,
 ## so the compiler and dyld both need pointing at it explicitly.

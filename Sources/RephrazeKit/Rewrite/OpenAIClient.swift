@@ -63,6 +63,88 @@ public final class OpenAIClient {
         }
     }
 
+    // MARK: - Four variants
+
+    /// Ask for all four rewrites in a single structured response.
+    public func rephraseVariants(
+        text: String,
+        model: String = Settings.model,
+        apiKey: String
+    ) async throws -> RephraseSet {
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 45
+
+        let body: [String: Any] = [
+            "model": model,
+            // Low but not zero: rewriting wants a little freedom, not invention.
+            "temperature": 0.5,
+            // Guarantees parseable output instead of hoping the model behaves.
+            "response_format": ["type": "json_object"],
+            "messages": [
+                ["role": "system", "content": Prompt.variantsSystem],
+                ["role": "user", "content": text],
+            ],
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            switch http.statusCode {
+            case 401: throw ClientError.invalidKey
+            case 429: throw ClientError.rateLimited
+            default: throw ClientError.serverError(status: http.statusCode, body: bodyText)
+            }
+        }
+
+        guard let content = Self.extractMessageContent(data) else {
+            throw ClientError.emptyResponse
+        }
+
+        let variants = Self.parseVariants(content)
+        guard !variants.isEmpty else { throw ClientError.emptyResponse }
+
+        return RephraseSet(original: text, variants: variants)
+    }
+
+    /// Pull `choices[0].message.content` out of a non-streamed response.
+    static func extractMessageContent(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = root["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any],
+              let content = message["content"] as? String
+        else {
+            return nil
+        }
+        return content
+    }
+
+    /// Turn the model's JSON into variants, keeping whatever is usable.
+    ///
+    /// Tolerant on purpose: a missing key should cost one option, not the whole
+    /// panel.
+    static func parseVariants(_ content: String) -> [RephraseVariant: String] {
+        guard let data = content.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return [:]
+        }
+
+        var result: [RephraseVariant: String] = [:]
+        for variant in RephraseVariant.allCases {
+            if let value = object[variant.rawValue] as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { result[variant] = trimmed }
+            }
+        }
+        return result
+    }
+
     private func run(
         text: String,
         model: String,

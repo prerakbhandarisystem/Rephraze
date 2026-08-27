@@ -23,7 +23,21 @@ public enum Keychain {
     private static let service = "com.prerak.rephraze"
     private static let account = "openai-api-key"
 
+    /// Read once per launch, then remembered.
+    ///
+    /// Every Keychain read is a chance for macOS to interrupt with an
+    /// authorisation dialog. Reading on every rephrase would turn a rare prompt
+    /// into a constant one.
+    private static var cached: String?
+
     public static func readAPIKey() -> String? {
+        if let cached { return cached }
+        let key = readFromKeychain()
+        cached = key
+        return key
+    }
+
+    private static func readFromKeychain() -> String? {
         var query = baseQuery()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -48,6 +62,7 @@ public enum Keychain {
         }
 
         let data = Data(trimmed.utf8)
+        cached = trimmed
 
         // Update in place if it already exists, otherwise add.
         let status = SecItemUpdate(
@@ -71,6 +86,7 @@ public enum Keychain {
     }
 
     public static func deleteAPIKey() throws {
+        cached = nil
         let status = SecItemDelete(baseQuery() as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.unexpectedStatus(status)

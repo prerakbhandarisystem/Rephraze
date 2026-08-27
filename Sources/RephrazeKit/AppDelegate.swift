@@ -1,5 +1,6 @@
 import AppKit
 
+@MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let statusMenu = StatusMenu()
@@ -14,12 +15,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let history = HistoryStore()
     private let openAI = OpenAIClient()
     private var activeRephrase: Task<Void, Never>?
+    private let panel = ResultPanel()
+
+    /// The field the current picker belongs to, captured before the round trip
+    /// so the target can never drift.
+    private var pendingField: FocusedField?
+    private var pendingWasSelection = false
+    private var pendingRecordID: UUID?
 
     public override init() {
         super.init()
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        // Must exist before any window opens, or ⌘V will not work in text fields.
+        MainMenu.install()
         statusMenu.install()
         statusMenu.isHotkeyRunning = { [weak self] in self?.eventTap?.isRunning ?? false }
         statusMenu.onRequestPermission = { [weak self] in self?.requestPermission() }
@@ -31,11 +41,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.history = history
         onboarding.onGranted = { [weak self] in self?.startListening() }
 
+        panel.model.onChoose = { [weak self] variant, text in
+            self?.apply(variant: variant, text: text)
+        }
+        panel.model.onCancel = { [weak self] in self?.dismissPanel() }
+
         // No window at all is the right look once this works -- but on a first
         // launch with no permission it reads as "nothing happened". Say so.
         Log.app.notice("Launched. Accessibility trusted = \(Permissions.isTrusted)")
         if Permissions.isTrusted {
             startListening()
+
+            // Permission is granted but there is no key, so a double-tap would
+            // fail. Say so up front instead of at the worst moment.
+            if !Keychain.hasAPIKey {
+                Log.app.notice("No API key stored -- opening settings")
+                settingsWindow.show()
+            }
         } else {
             // Fire the native macOS prompt first. It is the most reliable way to
             // get an app into the Accessibility list -- macOS adds the entry
@@ -54,6 +76,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Menu bar apps stay running with no windows open.
     public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// Clicking the app in Finder or the Dock while it is already running.
+    ///
+    /// A menu-bar-only app does nothing here by default, which reads exactly
+    /// like a broken app -- you double-click it and the screen does not change.
+    /// Opening Settings gives the click somewhere to land.
+    public func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows: Bool
+    ) -> Bool {
+        if Permissions.isTrusted {
+            settingsWindow.show()
+        } else {
+            onboarding.show()
+        }
+        return true
     }
 
     // MARK: - Hotkey
@@ -91,14 +130,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             runCapture()
 
         case .soloTap:
-            // Single taps only mean something while the panel is open, where
-            // they accept the rewrite. Ignored otherwise -- people tap ⌘ alone
-            // by accident constantly.
+            // People tap a modifier alone by accident constantly. Ignored.
             break
 
         case .escape:
-            // Only meaningful once the panel exists (Step 4).
-            break
+            dismissPanel()
+
+        case let .digit(index):
+            panel.model.chooseByDigit(index)
+
+        case .dismiss:
+            // The user carried on typing. Get out of the way.
+            dismissPanel()
         }
     }
 
@@ -155,83 +198,128 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Rephrase
 
-    /// Send the captured text to OpenAI and stream the rewrite back.
+    /// Ask for four rewrites, show them, and wait for a choice.
     private func rephrase(_ capture: CapturedText) {
         guard let apiKey = Keychain.readAPIKey() else {
             Log.rewrite.notice("No API key stored")
-            statusMenu.setLastCapture(
-                summary: "No API key — open Settings to add one",
-                preview: nil
-            )
-            settingsWindow.show()
+            statusMenu.setLastCapture(summary: "No API key — open Settings", preview: nil)
+            settingsWindow.show(tab: .general)
             return
         }
+
+        // Remember the target now. Re-deriving focus after the network round
+        // trip could land the text somewhere else entirely.
+        pendingField = capture.field
+        pendingWasSelection = capture.wasSelection
+        pendingRecordID = nil
 
         // Only one in flight. A second trigger replaces the first rather than
         // racing it, so two rewrites can never land in the same box.
         activeRephrase?.cancel()
+
+        panel.model.state = .loading
+        panel.model.appName = capture.field.appName
+        panel.show(near: capture.field)
+        eventTap?.wantsPanelKeys = true
 
         let original = capture.text
         let appName = capture.field.appName
         let model = Settings.model
 
         activeRephrase = Task { [weak self] in
-            var assembled = ""
             do {
-                let stream = self?.openAI.rephrase(text: original, model: model, apiKey: apiKey)
-                guard let stream else { return }
+                let set = try await self?.openAI.rephraseVariants(
+                    text: original, model: model, apiKey: apiKey
+                )
+                guard let set, !Task.isCancelled else { return }
 
-                for try await delta in stream {
-                    assembled += delta
-                }
-
-                guard !Task.isCancelled else { return }
-
-                let rewritten = assembled.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !rewritten.isEmpty else {
-                    await self?.reportRephraseFailure("OpenAI returned nothing")
-                    return
-                }
-
-                // Character counts only -- never the text itself.
                 Log.rewrite.notice("""
-                    Rewrote \(original.count) chars into \(rewritten.count)                     for \(appName, privacy: .public)
+                    Got \(set.available.count) variants for \(original.count) chars                     from \(appName, privacy: .public)
                     """)
 
-                await self?.finishRephrase(
-                    original: original,
-                    rewritten: rewritten,
-                    appName: appName
-                )
+                await self?.showVariants(set)
             } catch is CancellationError {
                 return
             } catch {
-                await self?.reportRephraseFailure(error.localizedDescription)
+                await self?.showFailure(error.localizedDescription)
             }
         }
     }
 
     @MainActor
-    private func finishRephrase(original: String, rewritten: String, appName: String) {
-        history.add(RephraseRecord(
-            original: original,
-            rewritten: rewritten,
-            appName: appName
-        ))
-
-        // Step 4 replaces this with the floating panel that puts the text back.
+    private func showVariants(_ set: RephraseSet) {
+        panel.model.state = .ready(set)
         statusMenu.setLastCapture(
-            summary: "Rewrote \(original.count) → \(rewritten.count) chars (\(appName))",
-            preview: Self.preview(of: rewritten)
+            summary: "\(set.available.count) versions ready — press 1–4",
+            preview: set.available.first.map { Self.preview(of: $0.text) }
         )
-        statusMenu.flashTap(success: true)
     }
 
     @MainActor
-    private func reportRephraseFailure(_ message: String) {
+    private func showFailure(_ message: String) {
         Log.rewrite.error("Rephrase failed: \(message, privacy: .public)")
+        panel.model.state = .failed(message)
         statusMenu.setLastCapture(summary: "Failed — \(message)", preview: nil)
         statusMenu.flashTap(success: false)
+    }
+
+    /// The user picked one. Put it back where it came from.
+    @MainActor
+    private func apply(variant: RephraseVariant, text: String) {
+        guard let field = pendingField else { return }
+
+        // Close first: the panel sits over the text, and the paste path needs
+        // the source app unobstructed.
+        dismissPanel()
+
+        let result = TextWriter.write(text, to: field, replacingSelection: pendingWasSelection)
+
+        switch result {
+        case .wroteViaAccessibility, .wroteViaPaste:
+            let how: String
+            switch result {
+            case .wroteViaPaste: how = "paste"
+            default: how = "accessibility"
+            }
+            Log.capture.notice(
+                "Applied \(variant.rawValue, privacy: .public) via \(how, privacy: .public)"
+            )
+
+            let record = RephraseRecord(
+                original: panelOriginal,
+                rewritten: text,
+                appName: field.appName,
+                accepted: true
+            )
+            history.add(record)
+            statusMenu.setLastCapture(
+                summary: "Applied \(variant.title) in \(field.appName)",
+                preview: Self.preview(of: text)
+            )
+            statusMenu.flashTap(success: true)
+
+        case let .failed(message):
+            Log.capture.error("Write failed: \(message, privacy: .public)")
+            statusMenu.setLastCapture(summary: "Could not write — \(message)", preview: nil)
+            statusMenu.flashTap(success: false)
+        }
+
+        settingsWindow.refreshIfVisible()
+        pendingField = nil
+    }
+
+    /// Original text of whatever the panel is currently showing.
+    private var panelOriginal: String {
+        if case let .ready(set) = panel.model.state { return set.original }
+        return ""
+    }
+
+    @MainActor
+    private func dismissPanel() {
+        guard panel.isVisible else { return }
+        panel.hide()
+        eventTap?.wantsPanelKeys = false
+        activeRephrase?.cancel()
     }
 
     /// Short, single-line excerpt for the menu.
