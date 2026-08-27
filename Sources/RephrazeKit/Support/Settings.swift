@@ -11,6 +11,7 @@ public enum Settings {
         static let voice = "voiceInstructions"
         static let voiceEnabled = "voiceEnabled"
         static let voiceAnswers = "voiceAnswers"
+        static let defaultLanguage = "defaultLanguage"
     }
 
     /// Chosen for speed and cost: a rephrase is a short, easy task and the whole
@@ -59,6 +60,23 @@ public enum Settings {
     public static var styleAnswers: VoiceAnswers {
         get { defaults.dictionary(forKey: Key.voiceAnswers) as? VoiceAnswers ?? [:] }
         set { defaults.set(newValue, forKey: Key.voiceAnswers) }
+    }
+
+    // MARK: - Translation
+
+    /// The language ⌥T writes in without asking first.
+    ///
+    /// `nil` means ask every time, and that is the default. Most people write
+    /// into one other language most days, but we do not know which one until
+    /// they say so -- and guessing it from the system locale would be wrong for
+    /// precisely the bilingual users this exists for, whose Mac is in English
+    /// because their Mac is in English.
+    public static var defaultLanguage: TargetLanguage? {
+        get {
+            defaults.string(forKey: Key.defaultLanguage)
+                .flatMap(TargetLanguage.init(rawValue:))
+        }
+        set { defaults.set(newValue?.rawValue, forKey: Key.defaultLanguage) }
     }
 
     /// True when a rephrase should return one personalised rewrite instead of

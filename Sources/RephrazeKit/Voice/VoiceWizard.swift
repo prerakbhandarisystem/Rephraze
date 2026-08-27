@@ -4,23 +4,6 @@ import Foundation
 /// one answer -- most people write in several places, for several audiences.
 public typealias VoiceAnswers = [String: [String]]
 
-/// What each question is trying to pin down.
-///
-/// The wizard stops once every trait that applies to this person has an answer.
-/// That is the "enough questions" test: not a fixed count, but whether anything
-/// is still unknown that would change how their rewrite reads.
-public enum VoiceTrait: String, CaseIterable, Codable, Sendable {
-    case context        // where they write
-    case audience       // who reads it
-    case formality      // how buttoned-up
-    case sentenceLength
-    case contractions
-    case decoration     // emoji and exclamation marks
-    case directness     // how they disagree
-    case jargon         // technical vocabulary
-    case verbosity      // shorter or same length
-}
-
 /// One answer someone can pick.
 public struct VoiceOption: Identifiable, Sendable, Equatable {
     public let id: String
@@ -52,7 +35,6 @@ public struct VoiceOption: Identifiable, Sendable, Equatable {
 /// One step of the wizard.
 public struct VoiceQuestion: Identifiable, Sendable {
     public let id: String
-    public let trait: VoiceTrait
     public let prompt: String
     public let help: String
     public let options: [VoiceOption]
@@ -77,7 +59,6 @@ public struct VoiceQuestion: Identifiable, Sendable {
 
     init(
         id: String,
-        trait: VoiceTrait,
         prompt: String,
         help: String,
         options: [VoiceOption],
@@ -86,7 +67,6 @@ public struct VoiceQuestion: Identifiable, Sendable {
         applies: @escaping @Sendable (VoiceAnswers) -> Bool
     ) {
         self.id = id
-        self.trait = trait
         self.prompt = prompt
         self.help = help
         self.options = options
@@ -96,7 +76,11 @@ public struct VoiceQuestion: Identifiable, Sendable {
     }
 }
 
-/// The adaptive question flow that builds someone's voice description.
+/// The adaptive question flow that builds someone's writing style description.
+///
+/// It stops when no applicable question is still unanswered -- not at a fixed
+/// count. Questions rule themselves out based on earlier answers, so someone
+/// who writes formally is never asked about emoji.
 public enum VoiceWizard {
 
     /// Hard ceiling. In practice the conditional skips land most people on six
@@ -118,7 +102,6 @@ public enum VoiceWizard {
 
         VoiceQuestion(
             id: "context",
-            trait: .context,
             prompt: "Where do you do most of your writing?",
             help: "Pick as many as apply.",
             options: [
@@ -146,7 +129,6 @@ public enum VoiceWizard {
 
         VoiceQuestion(
             id: "audience",
-            trait: .audience,
             prompt: "Who usually reads it?",
             help: "Pick as many as apply. Who you write to changes tone more than what you write about.",
             options: [
@@ -174,7 +156,6 @@ public enum VoiceWizard {
 
         VoiceQuestion(
             id: "formality",
-            trait: .formality,
             prompt: "How formal should it sound?",
             help: "",
             options: [
@@ -196,7 +177,6 @@ public enum VoiceWizard {
 
         VoiceQuestion(
             id: "sentences",
-            trait: .sentenceLength,
             prompt: "How do your sentences run?",
             help: "",
             options: [
@@ -215,7 +195,6 @@ public enum VoiceWizard {
 
         VoiceQuestion(
             id: "contractions",
-            trait: .contractions,
             prompt: "Contractions -- \"I'm\", \"don't\", \"we'll\"?",
             help: "",
             options: [
@@ -239,7 +218,6 @@ public enum VoiceWizard {
 
         VoiceQuestion(
             id: "decoration",
-            trait: .decoration,
             prompt: "Emoji and exclamation marks?",
             help: "",
             options: [
@@ -265,7 +243,6 @@ public enum VoiceWizard {
 
         VoiceQuestion(
             id: "directness",
-            trait: .directness,
             prompt: "When you disagree or give feedback?",
             help: "This is the one people most often get wrong about themselves. Answer how you actually write, not how you would like to.",
             options: [
@@ -284,7 +261,6 @@ public enum VoiceWizard {
 
         VoiceQuestion(
             id: "jargon",
-            trait: .jargon,
             prompt: "Technical language?",
             help: "",
             options: [
@@ -303,7 +279,6 @@ public enum VoiceWizard {
 
         VoiceQuestion(
             id: "verbosity",
-            trait: .verbosity,
             prompt: "Should the rewrite be shorter than what you wrote?",
             help: "",
             options: [

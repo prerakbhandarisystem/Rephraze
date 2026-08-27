@@ -299,6 +299,28 @@ private struct GeneralTab: View {
                 }
 
                 Section {
+                    Picker("Write in", selection: $model.defaultLanguage) {
+                        Text("Ask every time").tag(TargetLanguage?.none)
+                        Divider()
+                        ForEach(TargetLanguage.allCases) { language in
+                            Text("\(language.title) — \(language.endonym)")
+                                .tag(TargetLanguage?.some(language))
+                        }
+                    }
+                } header: {
+                    Text("Translation")
+                } footer: {
+                    Text("""
+                        Press ⌥T on the rewrite panel. Set a language here and it goes \
+                        straight there; press ⌥T again to pick a different one. Either way \
+                        the message is composed directly in that language, never translated \
+                        out of an English rewrite.
+                        """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                Section {
                     Toggle("Write the four versions at the same time", isOn: $model.parallelVariants)
                 } header: {
                     Text("Speed")

@@ -11,6 +11,8 @@ struct ResultPanelView: View {
 
     @ObservedObject var model: ResultPanelModel
     @State private var hovered: RephraseVariant?
+    @State private var hoveredLanguage: TargetLanguage?
+    @FocusState private var inputFocused: Bool
 
     /// Sized against the actual display rather than a fixed number.
     ///
@@ -22,7 +24,7 @@ struct ResultPanelView: View {
     /// which is the cheapest way to make the whole set fit without scrolling.
     private var panelWidth: CGFloat {
         let screen = NSScreen.main?.visibleFrame.width ?? 1440
-        return min(1000, max(680, screen * 0.56))
+        return min(880, max(620, screen * 0.44))
     }
 
     /// How tall the list of options may grow before it starts scrolling.
@@ -31,7 +33,7 @@ struct ResultPanelView: View {
     /// screen even when all four rewrites are long.
     private var maxListHeight: CGFloat {
         let screen = NSScreen.main?.visibleFrame.height ?? 900
-        return min(1000, max(460, screen * 0.74))
+        return min(1200, max(460, screen * 0.78))
     }
 
     var body: some View {
@@ -39,6 +41,10 @@ struct ResultPanelView: View {
             header
             Divider().opacity(0.6)
             content
+            if !model.isChoosingLanguage {
+                Divider().opacity(0.6)
+                refineBox
+            }
             Divider().opacity(0.6)
             footer
         }
@@ -76,6 +82,15 @@ struct ResultPanelView: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(.quaternary, in: Capsule())
+                }
+
+                if let language = model.activeLanguage {
+                    Text(language.title)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.tint)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.tint.opacity(0.14), in: Capsule())
                 }
 
                 Spacer(minLength: 0)
@@ -141,6 +156,17 @@ struct ResultPanelView: View {
         case .personal:
             ScrollView {
                 personalCard
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 10)
+            }
+            .frame(maxHeight: maxListHeight)
+
+        case .languages:
+            languageList
+
+        case let .translating(language):
+            ScrollView {
+                translationCard(language: language)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 10)
             }
@@ -258,6 +284,148 @@ struct ResultPanelView: View {
         .animation(.easeOut(duration: 0.14), value: model.personalComplete)
     }
 
+    // MARK: - Languages
+
+    /// The ten languages, on the ten number keys.
+    ///
+    /// Two columns rather than one long list. Ten stacked rows would make this
+    /// menu taller than the rewrites it covers, and it is a menu -- you are
+    /// looking for one known language, not reading all ten.
+    private var languageList: some View {
+        LazyVGrid(
+            columns: [GridItem(.flexible(), spacing: 7), GridItem(.flexible(), spacing: 7)],
+            alignment: .leading,
+            spacing: 7
+        ) {
+            ForEach(TargetLanguage.allCases) { language in
+                languageRow(language)
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 10)
+    }
+
+    /// One language: the key that picks it, its own name, then ours.
+    ///
+    /// The endonym leads because that is the string someone scanning for their
+    /// language actually recognises -- you find "日本語" without reading, where
+    /// "Japanese" has to be read.
+    private func languageRow(_ language: TargetLanguage) -> some View {
+        let isHovered = hoveredLanguage == language
+
+        return Button {
+            model.onChooseLanguage?(language)
+        } label: {
+            HStack(spacing: 10) {
+                keycap(language.shortcutDigit, active: true, highlighted: isHovered)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(language.endonym)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text(language.title)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isHovered ? AnyShapeStyle(.tint.opacity(0.13))
+                                    : AnyShapeStyle(.quaternary.opacity(0.35)))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(
+                        isHovered ? AnyShapeStyle(.tint.opacity(0.55)) : AnyShapeStyle(.clear),
+                        lineWidth: 1
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveredLanguage = $0 ? language : nil }
+        .animation(.easeOut(duration: 0.10), value: isHovered)
+    }
+
+    /// The message written in the chosen language, as it arrives.
+    ///
+    /// No length badge here, unlike the rewrite rows. A percentage against the
+    /// original would be comparing character counts across two writing systems,
+    /// where the same sentence is legitimately half the length in Japanese and
+    /// half again as long in German -- a number that means nothing but looks
+    /// like it means something.
+    private func translationCard(language: TargetLanguage) -> some View {
+        let ready = model.translationIsChoosable
+        let hasText = !model.translationText
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let isHovered = hoveredLanguage == language && ready
+
+        return Button {
+            model.chooseTranslation()
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                keycap(1, active: ready, highlighted: isHovered)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "character.bubble")
+                            .font(.system(size: 11))
+                            .foregroundStyle(ready ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                            .frame(width: 14)
+
+                        Text("In \(language.title)")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(ready ? .primary : .secondary)
+
+                        Text(language.endonym)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+
+                        Spacer(minLength: 0)
+                    }
+
+                    body(
+                        text: model.translationText,
+                        hasText: hasText,
+                        isComplete: model.translationComplete,
+                        error: nil,
+                        isRTL: language.isRightToLeft
+                    )
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(isHovered ? AnyShapeStyle(.tint.opacity(0.13))
+                                    : AnyShapeStyle(.quaternary.opacity(0.35)))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(
+                        isHovered ? AnyShapeStyle(.tint.opacity(0.55)) : AnyShapeStyle(.clear),
+                        lineWidth: 1
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!ready)
+        .onHover { hoveredLanguage = $0 ? language : nil }
+        .animation(.easeOut(duration: 0.14), value: model.translationComplete)
+    }
+
     // MARK: - One option
 
     /// A row in any of its states: waiting, mid-stream, done, or failed.
@@ -365,7 +533,13 @@ struct ResultPanelView: View {
     }
 
     @ViewBuilder
-    private func body(text: String, hasText: Bool, isComplete: Bool, error: String?) -> some View {
+    private func body(
+        text: String,
+        hasText: Bool,
+        isComplete: Bool,
+        error: String?,
+        isRTL: Bool = false
+    ) -> some View {
         if let error {
             Text(error)
                 .font(.system(size: 11.5))
@@ -377,7 +551,13 @@ struct ResultPanelView: View {
                 .lineSpacing(3.5)
                 .foregroundStyle(isComplete ? .primary : .secondary)
                 .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
+                // Arabic has to be laid out right to left, not merely rendered
+                // with its own glyphs: left-aligned Arabic wraps its lines from
+                // the wrong edge, which is the paragraph equivalent of reading
+                // a page from the back.
+                .multilineTextAlignment(isRTL ? .trailing : .leading)
+                .environment(\.layoutDirection, isRTL ? .rightToLeft : .leftToRight)
+                .frame(maxWidth: .infinity, alignment: isRTL ? .trailing : .leading)
                 .textSelection(.enabled)
         } else {
             // Placeholder bars, so the row keeps its shape while it waits and
@@ -409,20 +589,93 @@ struct ResultPanelView: View {
         return change < 0 ? "−\(percent)%" : "+\(percent)%"
     }
 
+    // MARK: - Follow-up input
+
+    /// Type an extra instruction and rewrite again, without starting over.
+    ///
+    /// The panel does not hold focus by default, so the box is inert until the
+    /// user asks for it -- Tab, or a click. That request activates the app;
+    /// leaving the box hands focus straight back.
+    private var refineBox: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "arrow.trianglehead.counterclockwise.rotate.90")
+                .font(.system(size: 11))
+                .foregroundStyle(model.isEditing ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+
+            ZStack(alignment: .leading) {
+                TextField("", text: $model.refineText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12.5))
+                    .focused($inputFocused)
+                    .onSubmit { model.submitRefinement() }
+                    .disabled(!model.isEditing)
+
+                if model.refineText.isEmpty {
+                    Text(model.isEditing
+                         ? "Shorter, no jargon, keep the link…"
+                         : "Press ⇥ to add an instruction and rewrite")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.tertiary)
+                        .allowsHitTesting(false)
+                }
+            }
+
+            if model.isEditing && !model.refineText.isEmpty {
+                Button {
+                    model.submitRefinement()
+                } label: {
+                    Image(systemName: "return")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.tint)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            model.isEditing
+                ? AnyShapeStyle(.tint.opacity(0.07))
+                : AnyShapeStyle(.clear)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { model.beginEditing() }
+        // Focus follows the model, which is driven by the window becoming key.
+        .onChange(of: model.isEditing) { _, editing in
+            inputFocused = editing
+        }
+    }
+
     // MARK: - Footer
 
+    @ViewBuilder
     private var footer: some View {
         HStack(spacing: 14) {
-            if case .personal = model.state {
+            switch model.state {
+            case .personal, .translating:
                 hint("1", "apply")
-            } else {
+            case .languages:
+                hint("1–0", "write in")
+            default:
                 hint("1–4", "apply")
             }
-            hint("esc", "dismiss")
+
+            if model.isChoosingLanguage {
+                hint("esc", "back")
+            } else {
+                hint("⌥T", "translate")
+                hint("⇥", "refine")
+                hint("esc", model.isEditing ? "stop editing" : "dismiss")
+            }
+
             Spacer()
-            Text("or keep typing to carry on")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
+            if !model.isEditing {
+                Text(model.isChoosingLanguage
+                     ? "written straight into that language"
+                     : "or keep typing to carry on")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)

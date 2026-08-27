@@ -55,8 +55,12 @@ public final class EventTap {
         /// Two solo taps inside the double-tap window.
         case doubleTap
         case escape
-        /// A number key 1-4 while the picker is open.
+        /// A number key the picker is currently using.
         case digit(Int)
+        /// Tab: the user wants to type a follow-up instruction.
+        case refine
+        /// ⌥T: show the languages this can be written in.
+        case translate
         /// Any other typing while the picker is open -- get out of the way.
         case dismiss
     }
@@ -65,6 +69,15 @@ public final class EventTap {
     /// and delivered to the panel, which cannot receive them itself because it
     /// never takes focus. Read synchronously inside the callback.
     public var wantsPanelKeys = false
+
+    /// How many number keys the picker is using right now.
+    ///
+    /// Four for the rewrites, ten for the language list, one for a single
+    /// result. Only that many are swallowed: pressing "7" over a four-option
+    /// picker has to type a 7 into the user's sentence, not vanish into a key
+    /// that does nothing. Read synchronously inside the callback, so it is a
+    /// plain Int rather than anything that needs the main actor.
+    public var panelDigitCount = 0
 
     public let trigger: TriggerKey
 
@@ -75,9 +88,21 @@ public final class EventTap {
     private let onSignal: (Signal) -> Void
 
     private static let escapeKeyCode: Int64 = 53
+    private static let tabKeyCode: Int64 = 48
+    private static let tKeyCode: Int64 = 17
 
-    /// Virtual key codes for the digits 1 through 4.
-    private static let digitKeyCodes: [Int64: Int] = [18: 1, 19: 2, 20: 3, 21: 4]
+    /// Virtual key codes for the number row, 1 through 9 and then 0.
+    private static let digitKeyCodes: [Int64: Int] = [
+        18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9, 29: 0,
+    ]
+
+    /// Whether a digit means anything to the picker as it currently stands.
+    ///
+    /// 0 is the tenth key on the row, not the zeroth, which is why this cannot
+    /// just compare the digit against the count.
+    private func isLivePanelDigit(_ digit: Int) -> Bool {
+        (digit == 0 ? 10 : digit) <= panelDigitCount
+    }
 
     public init(trigger: TriggerKey = .command, onSignal: @escaping (Signal) -> Void) {
         self.trigger = trigger
@@ -198,9 +223,38 @@ public final class EventTap {
                     return nil  // swallow, so esc does not also reach the app below
                 }
 
-                // Bare 1-4 picks an option. With a modifier held it is a real
-                // shortcut (⌘1 switches tabs) and must pass through untouched.
-                if !hasModifier, let digit = Self.digitKeyCodes[keyCode] {
+                // Tab hands focus to the panel's own input box. Swallowed, or
+                // the app underneath would also move its focus ring.
+                if !hasModifier, keyCode == Self.tabKeyCode {
+                    emit(.refine)
+                    return nil
+                }
+
+                // ⌥T opens the language list.
+                //
+                // Not a bare "t". While the picker is up, an unmodified letter
+                // means the user carried on typing, and swallowing one would
+                // silently drop a character out of the sentence they are
+                // writing -- too high a price for one letter's convenience.
+                // ⌥ is already this app's key, so ⌥T reads as ours.
+                if keyCode == Self.tKeyCode,
+                   event.flags.contains(.maskAlternate),
+                   !event.flags.contains(.maskCommand),
+                   !event.flags.contains(.maskControl) {
+                    // The trigger key is down. Tell the monitor a key was
+                    // pressed, or releasing ⌥ afterwards would read as a solo
+                    // tap and could complete a phantom double-tap.
+                    _ = monitor.handle(.keyDown)
+                    emit(.translate)
+                    return nil
+                }
+
+                // A bare number picks an option, but only one the picker is
+                // actually offering. With a modifier held it is a real shortcut
+                // (⌘1 switches tabs) and must pass through untouched.
+                if !hasModifier,
+                   let digit = Self.digitKeyCodes[keyCode],
+                   isLivePanelDigit(digit) {
                     emit(.digit(digit))
                     return nil
                 }

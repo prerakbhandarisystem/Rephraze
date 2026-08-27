@@ -39,17 +39,13 @@ public enum RephraseVariant: String, CaseIterable, Codable, Identifiable, Sendab
         }
     }
 
-    /// Number key that picks this one.
-    public var shortcutDigit: Int {
-        (Self.allCases.firstIndex(of: self) ?? 0) + 1
-    }
-
     /// What the model is told to produce for this variant.
     var instruction: String {
         switch self {
         case .polished:
-            return "Same tone and length as the original, just better written. "
-                + "Fix grammar and awkward phrasing. Change as little as possible."
+            return "Their own tone and roughly their own length, but properly "
+                + "written. Correct the mistakes, untangle the phrasing, and make "
+                + "it say clearly what they were reaching for."
         case .concise:
             return "Noticeably shorter. Cut filler and repetition while keeping "
                 + "every piece of information."

@@ -21,13 +21,14 @@ public final class ResultPanel {
     private var sizeSync: AnyCancellable?
     public let model = ResultPanelModel()
 
-    /// Where the panel's top-left corner should stay.
+    /// Where the panel's bottom edge and horizontal centre should stay.
     ///
-    /// AppKit positions windows by their bottom-left corner, so a panel that
-    /// grows -- which this one does constantly, as four variants stream in --
-    /// creeps upward over the very text it belongs to. Keeping the top edge
-    /// pinned instead means it grows downward, away from your writing.
-    private var anchorTopLeft: NSPoint?
+    /// The panel sits just above the text being edited, so the bottom edge is
+    /// the one that matters: pin that, and streaming content grows the panel
+    /// upward into empty screen instead of downward over the text field it
+    /// belongs to. AppKit already positions windows by their bottom-left
+    /// corner, so this is also the cheap direction to hold.
+    private var anchorBottomCentre: NSPoint?
     private var resizeObserver: NSObjectProtocol?
 
     public var isVisible: Bool { panel?.isVisible ?? false }
@@ -48,8 +49,37 @@ public final class ResultPanel {
     }
 
     public func hide() {
+        endEditing(restoringFocusTo: nil)
         panel?.orderOut(nil)
-        anchorTopLeft = nil
+        anchorBottomCentre = nil
+    }
+
+    /// Take keyboard focus so the user can type a follow-up instruction.
+    ///
+    /// This is the one moment the panel is allowed to steal focus. The caret
+    /// leaves their text field, so the app must be re-activated and the write
+    /// aimed at the stored element afterwards -- see `endEditing`.
+    public func beginEditing() {
+        guard let panel, !model.isEditing else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        model.isEditing = true
+    }
+
+    /// Give focus back to the app the text came from.
+    ///
+    /// Without this the paste fallback would fire while Rephraze itself is
+    /// frontmost, and the rewrite would go nowhere.
+    public func endEditing(restoringFocusTo pid: pid_t?) {
+        guard model.isEditing else { return }
+        model.isEditing = false
+        panel?.resignKey()
+
+        if let pid, let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate()
+        } else {
+            NSApp.hide(nil)
+        }
     }
 
     private func existingOrNew() -> NSPanel {
@@ -82,7 +112,7 @@ public final class ResultPanel {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, let panel = self.panel else { return }
-                self.keepTopEdgeFixed(panel)
+                self.keepAnchored(panel)
             }
         }
 
@@ -110,7 +140,7 @@ public final class ResultPanel {
         else { return }
 
         panel.setContentSize(fitting)
-        keepTopEdgeFixed(panel)
+        keepAnchored(panel)
     }
 
     deinit {
@@ -120,59 +150,62 @@ public final class ResultPanel {
         sizeSync?.cancel()
     }
 
-    /// Put the panel just under the text box it belongs to, so the connection
-    /// is obvious. Falls back to the pointer when the field will not say where
-    /// it is.
+    /// Centre the panel horizontally and sit it just above the text field.
+    ///
+    /// Centred because that is where the eye already is, and directly above the
+    /// field so the connection between the two is obvious without the panel
+    /// ever covering what is being rewritten. If there is not enough room above
+    /// -- a field near the top of the screen -- `clamp` slides it down, and it
+    /// overlaps rather than falling off the edge.
     private func position(_ panel: NSPanel, near field: FocusedField?) {
         panel.layoutIfNeeded()
-        let panelSize = panel.frame.size
+        let size = panel.frame.size
 
-        let anchor: NSPoint
+        // Use the screen the text is on, so this behaves on a second display.
+        let screen = fieldScreen(field) ?? NSScreen.main ?? NSScreen.screens[0]
+        let visible = screen.visibleFrame
+
+        let gap: CGFloat = 14
+        let bottom: CGFloat
         if let field, let frame = fieldFrame(field) {
-            // Screen coordinates from Accessibility are top-left origin; AppKit
-            // is bottom-left. Convert using the primary screen's height.
+            // Accessibility reports top-left origin; AppKit is bottom-left.
             let screenHeight = NSScreen.screens.first?.frame.maxY ?? 0
-
-            // The field, in AppKit coordinates.
-            let fieldBottom = screenHeight - frame.maxY
             let fieldTop = screenHeight - frame.minY
-
-            let visible = (NSScreen.screens.first {
-                $0.frame.contains(NSPoint(x: frame.minX, y: fieldBottom))
-            } ?? NSScreen.main)?.visibleFrame ?? .zero
-
-            let roomBelow = fieldBottom - visible.minY - 8
-            let roomAbove = visible.maxY - fieldTop - 8
-
-            // Below the field by default -- it reads as belonging to it. But
-            // the panel is tall now, and a field near the bottom of the screen
-            // leaves nowhere to put it; flip above rather than cover the text
-            // the user is looking at.
-            if panelSize.height <= roomBelow || roomBelow >= roomAbove {
-                anchor = NSPoint(x: frame.minX, y: fieldBottom - panelSize.height - 8)
-            } else {
-                anchor = NSPoint(x: frame.minX, y: fieldTop + 8)
-            }
+            bottom = fieldTop + gap
         } else {
-            let mouse = NSEvent.mouseLocation
-            anchor = NSPoint(x: mouse.x, y: mouse.y - panelSize.height - 12)
+            // No field to sit above: centre it and be done.
+            bottom = visible.midY - size.height / 2
         }
 
-        // Remember the top edge, not the bottom.
-        let clamped = clamp(anchor, size: panelSize)
-        anchorTopLeft = NSPoint(x: clamped.x, y: clamped.y + panelSize.height)
+        let origin = NSPoint(x: visible.midX - size.width / 2, y: bottom)
+        let clamped = clamp(origin, size: size)
+        anchorBottomCentre = NSPoint(x: clamped.x + size.width / 2, y: clamped.y)
         panel.setFrameOrigin(clamped)
     }
 
-    /// Re-apply the stored top-left after the content changes size.
-    private func keepTopEdgeFixed(_ panel: NSPanel) {
-        guard let anchorTopLeft else { return }
+    /// Re-apply the stored anchor after the content changes size.
+    ///
+    /// Holds the bottom edge and the centre line, so the panel grows upward and
+    /// outward symmetrically rather than drifting.
+    private func keepAnchored(_ panel: NSPanel) {
+        guard let anchorBottomCentre else { return }
         let size = panel.frame.size
-        let origin = NSPoint(x: anchorTopLeft.x, y: anchorTopLeft.y - size.height)
+        let origin = NSPoint(
+            x: anchorBottomCentre.x - size.width / 2,
+            y: anchorBottomCentre.y
+        )
         let clamped = clamp(origin, size: size)
         if panel.frame.origin != clamped {
             panel.setFrameOrigin(clamped)
         }
+    }
+
+    /// Which screen the text being rewritten is on.
+    private func fieldScreen(_ field: FocusedField?) -> NSScreen? {
+        guard let field, let frame = fieldFrame(field) else { return nil }
+        let screenHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        let point = NSPoint(x: frame.midX, y: screenHeight - frame.midY)
+        return NSScreen.screens.first { $0.frame.contains(point) }
     }
 
     /// Where the focused field is on screen, if it will tell us.

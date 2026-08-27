@@ -21,6 +21,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// so the target can never drift.
     private var pendingField: FocusedField?
     private var pendingWasSelection = false
+    private var pendingOriginal = ""
     private var pendingRecordID: UUID?
 
     public override init() {
@@ -48,7 +49,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.model.onChoosePersonal = { [weak self] text in
             self?.apply(label: "your style", text: text)
         }
-        panel.model.onCancel = { [weak self] in self?.dismissPanel() }
+        panel.model.onChooseLanguage = { [weak self] language in
+            self?.translate(into: language)
+        }
+        panel.model.onChooseTranslation = { [weak self] text in
+            guard let self else { return }
+            self.apply(label: self.panel.model.activeLanguage?.title ?? "translation", text: text)
+        }
+        panel.model.onStateChange = { [weak self] in self?.syncPanelDigits() }
+        panel.model.onRequestEditing = { [weak self] in self?.beginEditing() }
+        panel.model.onRefine = { [weak self] instruction in self?.refine(with: instruction) }
 
         // No window at all is the right look once this works -- but on a first
         // launch with no permission it reads as "nothing happened". Say so.
@@ -138,13 +148,46 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             break
 
         case .escape:
-            dismissPanel()
+            // esc unwinds one step at a time rather than always closing: while
+            // typing a follow-up it means "stop typing", and over the language
+            // list it means "back to the rewrites". Only at the top does it
+            // dismiss. Opening the list by mistake must not cost four rewrites
+            // that already arrived.
+            if panel.model.isEditing {
+                panel.endEditing(restoringFocusTo: pendingField?.pid)
+                eventTap?.wantsPanelKeys = true
+            } else if panel.model.closeLanguages() {
+                break
+            } else {
+                dismissPanel()
+            }
+
+        case .refine:
+            // The language list has no follow-up box, so there is nothing for
+            // focus to land in -- and taking it would pull the caret out of the
+            // user's text field for no reason.
+            guard !panel.model.isChoosingLanguage else { break }
+            beginEditing()
+
+        case .translate:
+            guard panel.isVisible, !panel.model.isEditing else { break }
+            // A saved default makes this one keystroke instead of two. Pressing
+            // it again, while that translation is on screen, opens the full
+            // list -- so the default is a shortcut past the menu rather than a
+            // lock-in to one language.
+            if let language = Settings.defaultLanguage, panel.model.activeLanguage == nil {
+                translate(into: language)
+            } else {
+                panel.model.showLanguages()
+            }
 
         case let .digit(index):
             panel.model.chooseByDigit(index)
 
         case .dismiss:
-            // The user carried on typing. Get out of the way.
+            // The user carried on typing. Get out of the way -- unless they are
+            // typing into our own box, where the keys are meant for us.
+            guard !panel.model.isEditing else { break }
             dismissPanel()
         }
     }
@@ -215,6 +258,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // trip could land the text somewhere else entirely.
         pendingField = capture.field
         pendingWasSelection = capture.wasSelection
+        pendingOriginal = capture.text
         pendingRecordID = nil
 
         // Only one in flight. A second trigger replaces the first rather than
@@ -413,6 +457,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // Read before dismissing: the panel owns the original text.
         let original = panel.model.currentOriginal
 
+        // If the panel took focus for the follow-up box, give it back first --
+        // the paste path needs the source app frontmost.
+        if panel.model.isEditing {
+            panel.endEditing(restoringFocusTo: field.pid)
+        }
+
         // Close first: the panel sits over the text, and the paste path needs
         // the source app unobstructed.
         dismissPanel()
@@ -453,11 +503,135 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingField = nil
     }
 
+    /// Hand focus to the panel so the user can type an instruction.
+    @MainActor
+    private func beginEditing() {
+        guard panel.isVisible, !panel.model.isEditing else { return }
+        // The tap must stop swallowing keys, or typing "1" would apply a
+        // rewrite instead of entering a character.
+        eventTap?.wantsPanelKeys = false
+        panel.beginEditing()
+    }
+
+    /// Rewrite again with an extra instruction from the user.
+    ///
+    /// Always returns a single result: they have just said what they want, so
+    /// offering four guesses alongside it would be ignoring them.
+    @MainActor
+    private func refine(with instruction: String) {
+        guard let apiKey = Keychain.readAPIKey(), pendingField != nil else { return }
+
+        panel.endEditing(restoringFocusTo: pendingField?.pid)
+        eventTap?.wantsPanelKeys = true
+
+        let combined = Prompt.combining(style: Settings.style, instruction: instruction)
+        let original = pendingOriginal
+        let appName = pendingField?.appName ?? ""
+        let model = Settings.model
+        let started = Date()
+
+        activeRephrase?.cancel()
+        panel.model.beginPersonal(original: original)
+
+        activeRephrase = Task { [weak self] in
+            guard let self else { return }
+            do {
+                for try await delta in openAI.rephrasePersonal(
+                    text: original, style: combined, model: model, apiKey: apiKey
+                ) {
+                    if Task.isCancelled { return }
+                    await self.panel.model.appendPersonal(delta)
+                }
+                guard !Task.isCancelled else { return }
+                await self.finishPersonal(
+                    original: original, appName: appName, started: started
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                await self.showFailure(error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - Translation
+
+    /// Write the captured text in another language.
+    ///
+    /// Built from `pendingOriginal` -- what the user actually typed -- and never
+    /// from whichever rewrite happens to be on screen. Translating the English
+    /// "Polished" version would put the message through two models before it
+    /// reached its reader: twice the latency, and the user's own phrasing lost
+    /// on the way, since the second model would be working from the first
+    /// model's words rather than theirs.
+    @MainActor
+    private func translate(into language: TargetLanguage) {
+        guard let apiKey = Keychain.readAPIKey(), pendingField != nil else { return }
+
+        let original = pendingOriginal
+        let appName = pendingField?.appName ?? ""
+        let model = Settings.model
+        let started = Date()
+
+        activeRephrase?.cancel()
+        panel.model.beginTranslating(into: language)
+
+        activeRephrase = Task { [weak self] in
+            guard let self else { return }
+            do {
+                for try await delta in openAI.translate(
+                    text: original, to: language, model: model, apiKey: apiKey
+                ) {
+                    if Task.isCancelled { return }
+                    await self.panel.model.appendTranslation(delta)
+                }
+
+                guard !Task.isCancelled else { return }
+                await self.finishTranslation(
+                    language: language, appName: appName, started: started
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                await self.showFailure(error.localizedDescription)
+            }
+        }
+    }
+
+    @MainActor
+    private func finishTranslation(language: TargetLanguage, appName: String, started: Date) {
+        panel.model.completeTranslation()
+
+        guard panel.model.translationIsChoosable else {
+            showFailure("OpenAI returned nothing.")
+            return
+        }
+
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        Log.rewrite.notice("""
+            Wrote \(language.rawValue, privacy: .public) for \(appName, privacy: .public) \
+            in \(elapsed)ms
+            """)
+
+        statusMenu.setLastCapture(
+            summary: "Ready in \(language.title) — press 1",
+            preview: Self.preview(of: panel.model.translationText)
+        )
+    }
+
+    /// Keep the tap's idea of the live number keys in step with the panel.
+    @MainActor
+    private func syncPanelDigits() {
+        eventTap?.panelDigitCount = panel.model.liveDigitCount
+    }
+
     @MainActor
     private func dismissPanel() {
         guard panel.isVisible else { return }
+        panel.endEditing(restoringFocusTo: pendingField?.pid)
         panel.hide()
         eventTap?.wantsPanelKeys = false
+        eventTap?.panelDigitCount = 0
         activeRephrase?.cancel()
     }
 

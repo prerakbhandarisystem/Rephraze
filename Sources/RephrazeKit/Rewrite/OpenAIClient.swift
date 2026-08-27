@@ -8,7 +8,6 @@ import Foundation
 public final class OpenAIClient {
 
     public enum ClientError: Error, LocalizedError {
-        case missingAPIKey
         case invalidKey
         case rateLimited
         case serverError(status: Int, body: String)
@@ -16,8 +15,6 @@ public final class OpenAIClient {
 
         public var errorDescription: String? {
             switch self {
-            case .missingAPIKey:
-                return "No API key. Add one in Rephraze settings."
             case .invalidKey:
                 return "That API key was rejected. Check it in settings."
             case .rateLimited:
@@ -36,33 +33,6 @@ public final class OpenAIClient {
 
     public init(session: URLSession = .shared) {
         self.session = session
-    }
-
-    /// Stream a rewrite, yielding text as it arrives.
-    public func rephrase(
-        text: String,
-        model: String = Settings.model,
-        apiKey: String
-    ) -> AsyncThrowingStream<String, Error> {
-
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    try await self.run(
-                        text: text,
-                        model: model,
-                        apiKey: apiKey,
-                        system: Prompt.system,
-                        temperature: 0.4,
-                        onDelta: { continuation.yield($0) }
-                    )
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
     }
 
     /// Stream one rewrite in the user's own described voice.
@@ -172,8 +142,8 @@ public final class OpenAIClient {
         var result: [RephraseVariant: String] = [:]
         for variant in RephraseVariant.allCases {
             if let value = object[variant.rawValue] as? String {
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { result[variant] = trimmed }
+                let cleaned = RewriteSanitizer.clean(value)
+                if !cleaned.isEmpty { result[variant] = cleaned }
             }
         }
         return result
@@ -238,6 +208,45 @@ public final class OpenAIClient {
         }
     }
 
+    // MARK: - Translation
+
+    /// Stream the message written in another language.
+    ///
+    /// One call, not two. The translation is composed straight from what the
+    /// user wrote -- see `Prompt.translateSystem` for why routing it through a
+    /// cleaned-up English draft first would be both slower and worse.
+    ///
+    /// Single result rather than four, for the same reason as the personal
+    /// path: the user has already answered the only question by picking a
+    /// language, so there is nothing left to choose between.
+    public func translate(
+        text: String,
+        to language: TargetLanguage,
+        model: String = Settings.model,
+        apiKey: String
+    ) -> AsyncThrowingStream<String, Error> {
+
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await self.run(
+                        text: text,
+                        model: model,
+                        apiKey: apiKey,
+                        system: Prompt.translateSystem(to: language),
+                        temperature: 0.4,
+                        maxTokens: Self.translationBudget(for: text),
+                        onDelta: { continuation.yield($0) }
+                    )
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     /// Ceiling on completion length, scaled to the input.
     ///
     /// Generous on purpose -- this is a runaway guard, not a length control.
@@ -247,12 +256,26 @@ public final class OpenAIClient {
         return min(4096, max(256, approxInputTokens * 3))
     }
 
+    /// Ceiling for a translation, which needs more room than a rewrite.
+    ///
+    /// `tokenBudget` assumes the output is roughly the size of the input, which
+    /// holds while both are the same language and breaks badly when they are
+    /// not. The same sentence costs several times more tokens in Hindi or
+    /// Japanese than in English, because the tokenizer was not built for those
+    /// scripts -- so the rewrite budget would cut a perfectly good translation
+    /// off mid-sentence. This is a runaway guard rather than a length control,
+    /// and a model that stops on its own never spends the headroom.
+    static func translationBudget(for text: String) -> Int {
+        min(4096, tokenBudget(for: text) * 2)
+    }
+
     private func run(
         text: String,
         model: String,
         apiKey: String,
         system: String,
         temperature: Double,
+        maxTokens: Int? = nil,
         onDelta: @escaping (String) -> Void
     ) async throws {
 
@@ -270,10 +293,10 @@ public final class OpenAIClient {
             // A rewrite is never much longer than its input. Without a cap, one
             // confused response can run for thousands of tokens while the user
             // watches a spinner.
-            "max_tokens": Self.tokenBudget(for: text),
+            "max_tokens": maxTokens ?? Self.tokenBudget(for: text),
             "messages": [
                 ["role": "system", "content": system],
-                ["role": "user", "content": Prompt.user(text)],
+                ["role": "user", "content": text],
             ],
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)

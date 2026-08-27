@@ -16,6 +16,8 @@ public final class SettingsModel: ObservableObject {
     @Published public var model: String = Settings.model
     @Published public var historyEnabled: Bool = true
     @Published public var parallelVariants: Bool = Settings.useParallelVariants
+    /// nil is "ask every time" rather than a missing value.
+    @Published public var defaultLanguage: TargetLanguage? = Settings.defaultLanguage
 
     // MARK: - Writing style
 
@@ -59,6 +61,7 @@ public final class SettingsModel: ObservableObject {
         model = Settings.model
         historyEnabled = history.isEnabled
         parallelVariants = Settings.useParallelVariants
+        defaultLanguage = Settings.defaultLanguage
         styleText = Settings.style
         styleEnabled = Settings.styleEnabled
         styleAnswers = Settings.styleAnswers
@@ -87,6 +90,7 @@ public final class SettingsModel: ObservableObject {
             ? Settings.defaultModel
             : model
         Settings.useParallelVariants = parallelVariants
+        Settings.defaultLanguage = defaultLanguage
 
         status = .saved
         refresh()
