@@ -165,6 +165,23 @@ public final class ResultPanelModel: ObservableObject {
         isSettled && !RephraseVariant.allCases.contains { slots[$0]?.isChoosable ?? false }
     }
 
+    /// Changes whenever the panel's shape should visibly change.
+    ///
+    /// Drives the resize animation. Deliberately not derived from the streamed
+    /// text: the panel should ease between kinds of content, not re-animate on
+    /// every token that arrives.
+    public var stateID: String {
+        switch state {
+        case .loading: return "loading"
+        case .streaming: return "streaming"
+        case .ready: return "ready"
+        case .personal: return "personal"
+        case .languages: return "languages"
+        case let .translating(language): return "translating-\(language.rawValue)"
+        case .failed: return "failed"
+        }
+    }
+
     // MARK: - Personal voice path
 
     public func beginPersonal(original: String) {

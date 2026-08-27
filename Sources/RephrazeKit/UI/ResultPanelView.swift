@@ -13,6 +13,8 @@ struct ResultPanelView: View {
     @State private var hovered: RephraseVariant?
     @State private var hoveredLanguage: TargetLanguage?
     @FocusState private var inputFocused: Bool
+    /// Drives the placeholder sweep while variants are still arriving.
+    @State private var shimmer = false
 
     /// Sized against the actual display rather than a fixed number.
     ///
@@ -39,7 +41,7 @@ struct ResultPanelView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider().opacity(0.6)
+            Divider().opacity(0.5)
             content
             if !model.isChoosingLanguage {
                 Divider().opacity(0.6)
@@ -49,39 +51,91 @@ struct ResultPanelView: View {
             footer
         }
         .frame(width: panelWidth)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.black.opacity(0.18), lineWidth: 0.5)
+        .background {
+            // Thick material reads as a real floating surface rather than a
+            // translucent sheet over whatever happens to be behind it.
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.thickMaterial)
+                .overlay {
+                    // A barely-there tint from the top, so the panel has a
+                    // direction of light instead of sitting flat.
+                    LinearGradient(
+                        colors: [.white.opacity(0.10), .clear],
+                        startPoint: .top,
+                        endPoint: .center
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            // Two hairlines: a light one to lift the top edge, a dark one to
+            // define the panel against a light background.
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [.white.opacity(0.28), .white.opacity(0.06)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 1
+                )
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(.black.opacity(0.16), lineWidth: 0.5)
                 .blendMode(.multiply)
-        )
-        .shadow(color: .black.opacity(0.28), radius: 30, y: 12)
+        }
+        // Layered shadow: a tight contact shadow plus a wide soft one, which is
+        // what stops it looking like a rectangle with a blur behind it.
+        .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
+        .shadow(color: .black.opacity(0.26), radius: 40, y: 18)
+        .animation(.smooth(duration: 0.22), value: model.stateID)
+        .onAppear {
+            withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
+                shimmer = true
+            }
+        }
     }
 
     // MARK: - Header
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 7) {
+            HStack(spacing: 8) {
+                // The mark, on a tinted chip -- the same wand as the app icon
+                // and the menu bar, so all three read as one thing.
                 Image(systemName: "wand.and.sparkles")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.tint)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 20, height: 20)
+                    .background {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 0.42, green: 0.42, blue: 0.96),
+                                        Color(red: 0.66, green: 0.31, blue: 0.90),
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    }
+                    .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
 
                 Text("Rephraze")
                     .font(.system(size: 13, weight: .semibold))
+                    .kerning(-0.1)
 
                 if !model.appName.isEmpty {
                     Text(model.appName)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 10.5, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.quaternary, in: Capsule())
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2.5)
+                        .background(.primary.opacity(0.07), in: Capsule())
+                        .overlay { Capsule().strokeBorder(.white.opacity(0.10), lineWidth: 0.5) }
                 }
 
                 if let language = model.activeLanguage {
@@ -102,25 +156,43 @@ struct ResultPanelView: View {
                 }
             }
 
-            // What you wrote, to compare the options against.
+            // What you wrote, to compare the options against. Labelled and set
+            // in its own recess, so it cannot be mistaken for one of the
+            // options -- it is the one block here you must not pick.
             if !model.currentOriginal.isEmpty {
-                Text(model.currentOriginal)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 9)
-                    .overlay(alignment: .leading) {
-                        // A quiet quote rule: this is the "before".
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(.quaternary)
-                            .frame(width: 2.5)
-                    }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("YOU WROTE")
+                        .font(.system(size: 9, weight: .semibold))
+                        .kerning(0.6)
+                        .foregroundStyle(.tertiary)
+
+                    Text(model.currentOriginal)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.leading, 10)
+                .padding(.vertical, 7)
+                .padding(.trailing, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(.primary.opacity(0.04))
+                }
+                .overlay(alignment: .leading) {
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 7, bottomLeadingRadius: 7,
+                        style: .continuous
+                    )
+                    .fill(.primary.opacity(0.16))
+                    .frame(width: 2.5)
+                }
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 14)
+        .padding(.horizontal, 16)
+        .padding(.top, 13)
         .padding(.bottom, 12)
     }
 
@@ -454,46 +526,80 @@ struct ResultPanelView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(isHovered ? AnyShapeStyle(.tint.opacity(0.13)) : AnyShapeStyle(.quaternary.opacity(0.35)))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isHovered
+                          ? AnyShapeStyle(Color.accentColor.opacity(0.11))
+                          : AnyShapeStyle(.primary.opacity(choosable ? 0.055 : 0.028)))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(
-                        isHovered ? AnyShapeStyle(.tint.opacity(0.55)) : AnyShapeStyle(.clear),
-                        lineWidth: 1
+                        isHovered ? AnyShapeStyle(Color.accentColor.opacity(0.50))
+                                  : AnyShapeStyle(.white.opacity(choosable ? 0.10 : 0.04)),
+                        lineWidth: isHovered ? 1 : 0.5
                     )
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            }
+            // An accent rail on the hovered card. Colour alone is easy to miss
+            // on a translucent panel over arbitrary content; an edge is not.
+            .overlay(alignment: .leading) {
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 12, bottomLeadingRadius: 12, style: .continuous
+                )
+                .fill(Color.accentColor)
+                .frame(width: isHovered ? 3 : 0)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .shadow(color: .black.opacity(isHovered ? 0.10 : 0), radius: 6, y: 2)
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!choosable)
         .onHover { hovered = $0 ? variant : nil }
-        .animation(.easeOut(duration: 0.14), value: isComplete)
-        .animation(.easeOut(duration: 0.10), value: isHovered)
+        // Landing text should settle in, not snap.
+        .animation(.smooth(duration: 0.20), value: isComplete)
+        .animation(.easeOut(duration: 0.12), value: isHovered)
     }
 
     /// The number you press, drawn as a key.
+    /// The number you press, drawn as a physical key.
+    ///
+    /// Worth the detail: it is the only affordance telling you the panel is
+    /// keyboard-driven, and a flat grey square reads as a label rather than a
+    /// key you can press.
     private func keycap(_ index: Int, active: Bool, highlighted: Bool) -> some View {
         Text("\(index)")
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .foregroundStyle(
                 highlighted ? AnyShapeStyle(.tint)
-                    : active ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary)
+                    : active ? AnyShapeStyle(.primary.opacity(0.75)) : AnyShapeStyle(.tertiary)
             )
-            .frame(width: 22, height: 22)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(.quaternary.opacity(active ? 0.9 : 0.4))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(.white.opacity(active ? 0.15 : 0), lineWidth: 0.5)
-            )
+            .frame(width: 24, height: 24)
+            .background {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: highlighted
+                                ? [.accentColor.opacity(0.30), .accentColor.opacity(0.16)]
+                                : [.primary.opacity(active ? 0.13 : 0.05),
+                                   .primary.opacity(active ? 0.07 : 0.03)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(
+                        highlighted ? Color.accentColor.opacity(0.45)
+                                    : .white.opacity(active ? 0.22 : 0.08),
+                        lineWidth: 0.75
+                    )
+            }
+            .shadow(color: .black.opacity(active ? 0.12 : 0), radius: 1, y: 0.5)
             .padding(.top, 1)
     }
 
@@ -511,21 +617,23 @@ struct ResultPanelView: View {
 
             Text(variant.title)
                 .font(.system(size: 12.5, weight: .semibold))
+                .kerning(-0.1)
                 .foregroundStyle(choosable ? .primary : .secondary)
 
             Text(variant.subtitle)
-                .font(.system(size: 11))
+                .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
 
             // How much shorter or longer this option is. The reason to pick
             // "Concise" is usually the number, so show the number.
             if isComplete, let delta = lengthDelta(for: text) {
                 Text(delta)
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1.5)
-                    .background(.quaternary.opacity(0.7), in: Capsule())
+                    .padding(.horizontal, 5.5)
+                    .padding(.vertical, 2)
+                    .background(.primary.opacity(0.07), in: Capsule())
+                    .overlay { Capsule().strokeBorder(.white.opacity(0.10), lineWidth: 0.5) }
             }
 
             Spacer(minLength: 0)
@@ -548,7 +656,7 @@ struct ResultPanelView: View {
         } else if hasText {
             Text(text)
                 .font(.system(size: 13.5))
-                .lineSpacing(3.5)
+                .lineSpacing(4)
                 .foregroundStyle(isComplete ? .primary : .secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 // Arabic has to be laid out right to left, not merely rendered
@@ -570,13 +678,32 @@ struct ResultPanelView: View {
         }
     }
 
+    /// A bar that sweeps, so a row waiting on the network looks alive.
+    ///
+    /// Cheaper than a spinner per row and quieter: four spinners in a column
+    /// reads as four separate problems.
     private func placeholderBar(widthFraction: CGFloat) -> some View {
         GeometryReader { geo in
-            RoundedRectangle(cornerRadius: 3)
-                .fill(.quaternary.opacity(0.6))
-                .frame(width: geo.size.width * widthFraction, height: 8)
+            let width = geo.size.width * widthFraction
+            RoundedRectangle(cornerRadius: 4)
+                .fill(.primary.opacity(0.08))
+                .frame(width: width, height: 9)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(
+                            LinearGradient(
+                                colors: [.clear, .primary.opacity(0.10), .clear],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: width * 0.45)
+                        .offset(x: shimmer ? width * 0.85 : -width * 0.45)
+                        .frame(width: width, alignment: .leading)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
         }
-        .frame(height: 8)
+        .frame(height: 9)
     }
 
     /// Percentage change in length against the original, when it is worth saying.
@@ -685,17 +812,23 @@ struct ResultPanelView: View {
         HStack(spacing: 5) {
             Text(key)
                 .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary.opacity(0.65))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2.5)
-                .background(
+                .background {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(.quaternary.opacity(0.8))
-                )
-                .overlay(
+                        .fill(
+                            LinearGradient(
+                                colors: [.primary.opacity(0.11), .primary.opacity(0.06)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                }
+                .overlay {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
-                )
+                        .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+                }
             Text(label)
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)

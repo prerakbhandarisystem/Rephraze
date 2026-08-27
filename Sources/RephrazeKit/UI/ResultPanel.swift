@@ -181,6 +181,16 @@ public final class ResultPanel {
         let clamped = clamp(origin, size: size)
         anchorBottomCentre = NSPoint(x: clamped.x + size.width / 2, y: clamped.y)
         panel.setFrameOrigin(clamped)
+
+        // Positioning depends on what the other app is willing to tell us, and
+        // silently falls back when it says nothing. Log which happened.
+        let located = field.flatMap { fieldFrame($0) } != nil
+        Log.app.notice("""
+            Panel placed: field=\(located ? "located" : "UNKNOWN, centred instead", privacy: .public) \
+            size=\(Int(size.width))x\(Int(size.height)) \
+            wanted_y=\(Int(origin.y)) got_y=\(Int(clamped.y)) \
+            clamped=\(abs(origin.y - clamped.y) > 1 ? "YES" : "no", privacy: .public)
+            """)
     }
 
     /// Re-apply the stored anchor after the content changes size.
@@ -197,6 +207,15 @@ public final class ResultPanel {
         let clamped = clamp(origin, size: size)
         if panel.frame.origin != clamped {
             panel.setFrameOrigin(clamped)
+        }
+
+        // If the panel grew tall enough to hit the top of the screen, clamp
+        // drags it back down -- over the field it is supposed to sit above.
+        if abs(origin.y - clamped.y) > 1 {
+            Log.app.notice("""
+                Panel outgrew the space above the field: \
+                height=\(Int(size.height)) wanted_y=\(Int(origin.y)) got_y=\(Int(clamped.y))
+                """)
         }
     }
 
