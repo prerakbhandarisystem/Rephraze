@@ -72,7 +72,7 @@ public final class OpenAIClient {
     /// answered.
     public func rephrasePersonal(
         text: String,
-        voice: String,
+        style: String,
         model: String = Settings.model,
         apiKey: String
     ) -> AsyncThrowingStream<String, Error> {
@@ -84,7 +84,7 @@ public final class OpenAIClient {
                         text: text,
                         model: model,
                         apiKey: apiKey,
-                        system: Prompt.personalSystem(voice: voice),
+                        system: Prompt.personalSystem(style: style),
                         temperature: 0.4,
                         onDelta: { continuation.yield($0) }
                     )

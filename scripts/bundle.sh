@@ -35,6 +35,14 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$BIN_PATH" "$APP/Contents/MacOS/${APP_NAME}"
 
+# The icon is generated art (scripts/make-icon.swift). Build it on demand so a
+# fresh clone does not ship without one.
+if [[ ! -f Resources/AppIcon.icns ]]; then
+  echo "==> Generating app icon"
+  swift scripts/make-icon.swift
+fi
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+
 sed -e "s/__VERSION__/${VERSION}/" \
     -e "s/__BUILD__/${BUILD_NUMBER}/" \
     Resources/Info.plist > "$APP/Contents/Info.plist"

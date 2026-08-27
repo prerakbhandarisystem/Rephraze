@@ -26,7 +26,7 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
     public var onRequestPermission: () -> Void = {}
 
     public var onOpenSettings: () -> Void = {}
-    public var onOpenVoice: () -> Void = {}
+    public var onOpenStyle: () -> Void = {}
 
     private static let idleSymbol = "wand.and.sparkles"
     private static let activeSymbol = "checkmark.circle.fill"
@@ -127,13 +127,13 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
 
         // Listed above Settings, and named for the outcome rather than the
         // screen, because it is the one thing worth setting up.
-        let voice = NSMenuItem(
-            title: Settings.usesPersonalVoice ? "Edit your voice…" : "Teach it your voice…",
-            action: #selector(handleOpenVoice),
+        let styleItem = NSMenuItem(
+            title: Settings.usesWritingStyle ? "Edit writing style…" : "Teach it your writing style…",
+            action: #selector(handleOpenStyle),
             keyEquivalent: ""
         )
-        voice.target = self
-        menu.addItem(voice)
+        styleItem.target = self
+        menu.addItem(styleItem)
 
         let settings = NSMenuItem(
             title: "Settings…",
@@ -186,8 +186,8 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
             : "\(tapCount) triggers seen"
     }
 
-    @objc private func handleOpenVoice() {
-        onOpenVoice()
+    @objc private func handleOpenStyle() {
+        onOpenStyle()
     }
 
     @objc private func handleOpenSettings() {

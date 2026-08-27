@@ -1,7 +1,7 @@
 APP := build/Rephraze.app
 INSTALLED := /Applications/Rephraze.app
 
-.PHONY: all build run install uninstall cert test clean status
+.PHONY: all build run install uninstall cert icon test clean status
 
 all: build
 
@@ -27,6 +27,10 @@ uninstall:
 	@pkill -x Rephraze 2>/dev/null || true
 	@rm -rf $(INSTALLED)
 	@echo "Removed $(INSTALLED)"
+
+## Redraw the app icon from scripts/make-icon.swift.
+icon:
+	@swift scripts/make-icon.swift
 
 ## One-time: create the stable signing identity (see scripts/make-cert.sh)
 cert:

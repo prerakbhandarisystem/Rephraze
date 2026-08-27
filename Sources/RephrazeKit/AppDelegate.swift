@@ -38,7 +38,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusMenu.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
-        statusMenu.onOpenVoice = { [weak self] in self?.settingsWindow.show(tab: .voice) }
+        statusMenu.onOpenStyle = { [weak self] in self?.settingsWindow.show(tab: .style) }
         settingsWindow.history = history
         onboarding.onGranted = { [weak self] in self?.startListening() }
 
@@ -46,7 +46,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.apply(label: variant.title, text: text)
         }
         panel.model.onChoosePersonal = { [weak self] text in
-            self?.apply(label: "your voice", text: text)
+            self?.apply(label: "your style", text: text)
         }
         panel.model.onCancel = { [weak self] in self?.dismissPanel() }
 
@@ -234,8 +234,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // A described voice replaces the four-way choice entirely: they have
         // already said how they want to sound, so asking again is a step
         // backwards.
-        if Settings.usesPersonalVoice {
-            let voice = Settings.voice
+        if Settings.usesWritingStyle {
+            let style = Settings.style
             panel.model.beginPersonal(original: original)
 
             activeRephrase = Task { [weak self] in
@@ -243,7 +243,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 var sawText = false
                 do {
                     for try await delta in openAI.rephrasePersonal(
-                        text: original, voice: voice, model: model, apiKey: apiKey
+                        text: original, style: style, model: model, apiKey: apiKey
                     ) {
                         if Task.isCancelled { return }
                         if !sawText {
@@ -345,12 +345,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)
         Log.rewrite.notice("""
-            Personal rewrite of \(original.count) chars \
+            Styled rewrite of \(original.count) chars \
             from \(appName, privacy: .public) in \(elapsed)ms
             """)
 
         statusMenu.setLastCapture(
-            summary: "Ready in your voice — press 1",
+            summary: "Ready in your style — press 1",
             preview: Self.preview(of: panel.model.personalText)
         )
     }

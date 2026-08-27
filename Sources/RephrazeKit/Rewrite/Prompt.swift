@@ -95,8 +95,8 @@ public enum Prompt {
     /// keep their @mentions intact, and still must not invent facts. Those
     /// rules are what make it safe to paste straight back into their app, so
     /// they get the last word.
-    public static func personalSystem(voice: String) -> String {
-        let described = voice.trimmingCharacters(in: .whitespacesAndNewlines)
+    public static func personalSystem(style: String) -> String {
+        let described = style.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return """
             You rewrite text so that it sounds like one specific person.

@@ -22,7 +22,7 @@ struct ResultPanelView: View {
     /// which is the cheapest way to make the whole set fit without scrolling.
     private var panelWidth: CGFloat {
         let screen = NSScreen.main?.visibleFrame.width ?? 1440
-        return min(860, max(620, screen * 0.46))
+        return min(1000, max(680, screen * 0.56))
     }
 
     /// How tall the list of options may grow before it starts scrolling.
@@ -31,7 +31,7 @@ struct ResultPanelView: View {
     /// screen even when all four rewrites are long.
     private var maxListHeight: CGFloat {
         let screen = NSScreen.main?.visibleFrame.height ?? 900
-        return min(940, max(420, screen * 0.66))
+        return min(1000, max(460, screen * 0.74))
     }
 
     var body: some View {
@@ -209,7 +209,7 @@ struct ResultPanelView: View {
                             .foregroundStyle(ready ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
                             .frame(width: 14)
 
-                        Text("In your voice")
+                        Text("In your style")
                             .font(.system(size: 12.5, weight: .semibold))
                             .foregroundStyle(ready ? .primary : .secondary)
 
@@ -373,8 +373,8 @@ struct ResultPanelView: View {
                 .fixedSize(horizontal: false, vertical: true)
         } else if hasText {
             Text(text)
-                .font(.system(size: 13))
-                .lineSpacing(2)
+                .font(.system(size: 13.5))
+                .lineSpacing(3.5)
                 .foregroundStyle(isComplete ? .primary : .secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)

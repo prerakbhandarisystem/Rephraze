@@ -23,8 +23,8 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
     public func show(tab: SettingsTab? = nil) {
         let landing = tab ?? {
             if !Keychain.hasAPIKey { return SettingsTab.general }
-            if Settings.voice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return .voice
+            if Settings.style.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return .style
             }
             return .history
         }()

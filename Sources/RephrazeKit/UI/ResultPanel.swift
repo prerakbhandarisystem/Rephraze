@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 import ApplicationServices
 
 /// The floating picker window.
@@ -16,6 +17,8 @@ import ApplicationServices
 public final class ResultPanel {
 
     private var panel: NSPanel?
+    private var hosting: NSHostingController<ResultPanelView>?
+    private var sizeSync: AnyCancellable?
     public let model = ResultPanelModel()
 
     /// Where the panel's top-left corner should stay.
@@ -40,6 +43,8 @@ public final class ResultPanel {
         // orderFrontRegardless, not makeKeyAndOrderFront: we want it visible
         // without becoming key.
         panel.orderFrontRegardless()
+        resizeToFitContent()
+        Log.app.notice("Panel shown at \(Int(panel.frame.width))x\(Int(panel.frame.height))")
     }
 
     public func hide() {
@@ -52,6 +57,7 @@ public final class ResultPanel {
 
         let hosting = NSHostingController(rootView: ResultPanelView(model: model))
         hosting.view.setFrameSize(hosting.view.fittingSize)
+        self.hosting = hosting
 
         let created = NSPanel(contentViewController: hosting)
         created.styleMask = [.nonactivatingPanel, .fullSizeContentView, .borderless]
@@ -80,14 +86,38 @@ public final class ResultPanel {
             }
         }
 
+        // A borderless panel does not reliably follow its SwiftUI content as
+        // that content grows. Drive the size explicitly instead: every model
+        // change re-measures the view and resizes the window to match.
+        sizeSync = model.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.resizeToFitContent()
+            }
+
         panel = created
         return created
+    }
+
+    /// Match the window to whatever the SwiftUI content now wants to be.
+    public func resizeToFitContent() {
+        guard let panel, let hosting, panel.isVisible else { return }
+
+        let fitting = hosting.view.fittingSize
+        guard fitting.width > 0, fitting.height > 0 else { return }
+        guard abs(panel.frame.size.height - fitting.height) > 0.5
+                || abs(panel.frame.size.width - fitting.width) > 0.5
+        else { return }
+
+        panel.setContentSize(fitting)
+        keepTopEdgeFixed(panel)
     }
 
     deinit {
         if let resizeObserver {
             NotificationCenter.default.removeObserver(resizeObserver)
         }
+        sizeSync?.cancel()
     }
 
     /// Put the panel just under the text box it belongs to, so the connection

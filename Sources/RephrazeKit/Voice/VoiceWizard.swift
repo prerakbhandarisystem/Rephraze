@@ -1,5 +1,9 @@
 import Foundation
 
+/// Answers, keyed by question id. A list because some questions take more than
+/// one answer -- most people write in several places, for several audiences.
+public typealias VoiceAnswers = [String: [String]]
+
 /// What each question is trying to pin down.
 ///
 /// The wizard stops once every trait that applies to this person has an answer.
@@ -23,15 +27,25 @@ public struct VoiceOption: Identifiable, Sendable, Equatable {
     public let label: String
     public let detail: String
 
-    /// The sentence this answer contributes to the finished voice description.
-    /// Empty means it adds nothing -- some answers are only used for routing.
+    /// Complete sentence, used when this is the only answer to its question.
     let phrase: String
 
-    public init(id: String, label: String, detail: String, phrase: String) {
+    /// Noun phrase, used when the question takes several answers and they get
+    /// joined into one sentence. Empty means `phrase` is used instead.
+    let fragment: String
+
+    public init(
+        id: String,
+        label: String,
+        detail: String,
+        phrase: String,
+        fragment: String = ""
+    ) {
         self.id = id
         self.label = label
         self.detail = detail
         self.phrase = phrase
+        self.fragment = fragment
     }
 }
 
@@ -43,12 +57,42 @@ public struct VoiceQuestion: Identifiable, Sendable {
     public let help: String
     public let options: [VoiceOption]
 
+    /// Whether several answers may be chosen.
+    ///
+    /// True only where several are genuinely compatible. "Where do you write?"
+    /// can be chat *and* email; "how formal?" cannot be casual *and* formal,
+    /// and offering that would produce a self-contradicting instruction.
+    public let allowsMultiple: Bool
+
+    /// Sentence opener for the multi-answer case: "I write mostly in ".
+    let lead: String
+
     /// Whether this question is worth asking, given what is already answered.
     /// Anything inferable from earlier answers is skipped rather than asked.
-    let applies: @Sendable ([String: String]) -> Bool
+    let applies: @Sendable (VoiceAnswers) -> Bool
 
     public func option(_ id: String) -> VoiceOption? {
         options.first { $0.id == id }
+    }
+
+    init(
+        id: String,
+        trait: VoiceTrait,
+        prompt: String,
+        help: String,
+        options: [VoiceOption],
+        allowsMultiple: Bool = false,
+        lead: String = "",
+        applies: @escaping @Sendable (VoiceAnswers) -> Bool
+    ) {
+        self.id = id
+        self.trait = trait
+        self.prompt = prompt
+        self.help = help
+        self.options = options
+        self.allowsMultiple = allowsMultiple
+        self.lead = lead
+        self.applies = applies
     }
 }
 
@@ -59,6 +103,15 @@ public enum VoiceWizard {
     /// or seven -- a wizard that outstays its welcome does not get finished.
     public static let maxQuestions = 10
 
+    /// Single-answer questions read cleanly as `answers[id]?.first`.
+    static func choice(_ answers: VoiceAnswers, _ questionID: String) -> String? {
+        answers[questionID]?.first
+    }
+
+    static func chose(_ answers: VoiceAnswers, _ questionID: String, _ optionID: String) -> Bool {
+        answers[questionID]?.contains(optionID) ?? false
+    }
+
     // MARK: - The questions
 
     public static let all: [VoiceQuestion] = [
@@ -67,21 +120,27 @@ public enum VoiceWizard {
             id: "context",
             trait: .context,
             prompt: "Where do you do most of your writing?",
-            help: "This sets the baseline. A Slack message and a design doc want different rewrites.",
+            help: "Pick as many as apply.",
             options: [
                 .init(id: "chat", label: "Chat",
                       detail: "Slack, Teams, Discord",
-                      phrase: "I write mostly in chat -- Slack and similar."),
+                      phrase: "I write mostly in chat -- Slack and similar.",
+                      fragment: "chat like Slack"),
                 .init(id: "email", label: "Email",
                       detail: "Work mail, replies, threads",
-                      phrase: "I write mostly email."),
+                      phrase: "I write mostly email.",
+                      fragment: "email"),
                 .init(id: "docs", label: "Documents",
                       detail: "Specs, notes, long-form",
-                      phrase: "I write mostly documents and long-form notes."),
+                      phrase: "I write mostly documents and long-form notes.",
+                      fragment: "documents and long-form notes"),
                 .init(id: "reviews", label: "Code review",
                       detail: "PR comments, issues, tickets",
-                      phrase: "I write mostly pull request comments and issues."),
+                      phrase: "I write mostly pull request comments and issues.",
+                      fragment: "pull request comments and issues"),
             ],
+            allowsMultiple: true,
+            lead: "I write mostly in ",
             applies: { _ in true }
         ),
 
@@ -89,21 +148,27 @@ public enum VoiceWizard {
             id: "audience",
             trait: .audience,
             prompt: "Who usually reads it?",
-            help: "Who you are writing to changes tone more than what you are writing about.",
+            help: "Pick as many as apply. Who you write to changes tone more than what you write about.",
             options: [
                 .init(id: "teammates", label: "Teammates",
                       detail: "People you work with daily",
-                      phrase: "Usually to teammates I know well."),
+                      phrase: "Usually to teammates I know well.",
+                      fragment: "teammates I know well"),
                 .init(id: "customers", label: "Customers",
                       detail: "Clients, users, support",
-                      phrase: "Usually to customers or users."),
+                      phrase: "Usually to customers or users.",
+                      fragment: "customers and users"),
                 .init(id: "leadership", label: "Leadership",
                       detail: "Managers, execs, stakeholders",
-                      phrase: "Usually to managers and stakeholders."),
+                      phrase: "Usually to managers and stakeholders.",
+                      fragment: "managers and stakeholders"),
                 .init(id: "public", label: "Public",
                       detail: "Community, social, open source",
-                      phrase: "Usually in public, where anyone might read it."),
+                      phrase: "Usually in public, where anyone might read it.",
+                      fragment: "a public audience"),
             ],
+            allowsMultiple: true,
+            lead: "Usually writing to ",
             applies: { _ in true }
         ),
 
@@ -167,7 +232,7 @@ public enum VoiceWizard {
             // Both extremes of formality already answer this. Only the middle
             // is genuinely ambiguous, so only the middle gets asked.
             applies: { answers in
-                let formality = answers["formality"]
+                let formality = choice(answers, "formality")
                 return formality == "casual" || formality == "neutral"
             }
         ),
@@ -188,13 +253,13 @@ public enum VoiceWizard {
                       detail: "They are part of how I talk",
                       phrase: "Emoji and exclamation marks are part of how I write. Use them."),
             ],
-            // Only a live question where they are plausible. Formal documents
-            // for leadership have already answered it.
+            // Only a live question where they are plausible. Formal writing for
+            // leadership has already answered it.
             applies: { answers in
-                if answers["formality"] == "formal" { return false }
-                let context = answers["context"]
-                let audience = answers["audience"]
-                return context == "chat" || audience == "teammates" || audience == "public"
+                if choice(answers, "formality") == "formal" { return false }
+                return chose(answers, "context", "chat")
+                    || chose(answers, "audience", "teammates")
+                    || chose(answers, "audience", "public")
             }
         ),
 
@@ -259,27 +324,35 @@ public enum VoiceWizard {
     // MARK: - Flow
 
     /// The questions that apply given what has been answered so far.
-    public static func applicable(given answers: [String: String]) -> [VoiceQuestion] {
+    public static func applicable(given answers: VoiceAnswers) -> [VoiceQuestion] {
         all.filter { $0.applies(answers) }
     }
 
     /// The next question to ask, or `nil` when there is nothing left worth
     /// asking -- which is the signal to stop and show the result.
-    public static func next(given answers: [String: String]) -> VoiceQuestion? {
+    public static func next(given answers: VoiceAnswers) -> VoiceQuestion? {
         guard answers.count < maxQuestions else { return nil }
-        return applicable(given: answers).first { answers[$0.id] == nil }
+        return applicable(given: answers).first { (answers[$0.id] ?? []).isEmpty }
     }
 
     /// How far along, for the progress indicator. The denominator moves as
     /// answers rule questions in and out, which is honest: the wizard genuinely
     /// does not know its own length until it is nearly done.
-    public static func progress(given answers: [String: String]) -> (asked: Int, total: Int) {
-        let total = min(maxQuestions, max(applicable(given: answers).count, answers.count))
-        return (answers.count, total)
+    public static func progress(given answers: VoiceAnswers) -> (asked: Int, total: Int) {
+        let answered = answers.filter { !$0.value.isEmpty }.count
+        let total = min(maxQuestions, max(applicable(given: answers).count, answered))
+        return (answered, total)
     }
 
-    public static func isComplete(_ answers: [String: String]) -> Bool {
+    public static func isComplete(_ answers: VoiceAnswers) -> Bool {
         next(given: answers) == nil && !answers.isEmpty
+    }
+
+    /// Strip answers to questions that no longer apply, so a retracted branch
+    /// cannot leave a stale phrase in the description.
+    public static func pruned(_ answers: VoiceAnswers) -> VoiceAnswers {
+        let allowed = Set(applicable(given: answers).map(\.id))
+        return answers.filter { allowed.contains($0.key) && !$0.value.isEmpty }
     }
 
     // MARK: - Result
@@ -289,18 +362,34 @@ public enum VoiceWizard {
     /// Plain first-person prose rather than a list of settings, because that is
     /// what the model reads best -- and because the user can then edit it by
     /// hand afterwards without learning a syntax.
-    public static func describe(_ answers: [String: String]) -> String {
+    public static func describe(_ answers: VoiceAnswers) -> String {
         var lines: [String] = []
 
         for question in all {
-            guard let answerID = answers[question.id],
-                  let option = question.option(answerID),
-                  !option.phrase.isEmpty
-            else { continue }
-            lines.append(option.phrase)
+            let selected = (answers[question.id] ?? [])
+                .compactMap { question.option($0) }
+            guard !selected.isEmpty else { continue }
+
+            if question.allowsMultiple && selected.count > 1 {
+                let fragments = selected.map { $0.fragment.isEmpty ? $0.label : $0.fragment }
+                lines.append(question.lead + list(fragments) + ".")
+            } else if let only = selected.first, !only.phrase.isEmpty {
+                lines.append(only.phrase)
+            }
         }
 
         guard !lines.isEmpty else { return "" }
         return lines.joined(separator: " ")
+    }
+
+    /// "a, b and c"
+    static func list(_ items: [String]) -> String {
+        switch items.count {
+        case 0: return ""
+        case 1: return items[0]
+        case 2: return "\(items[0]) and \(items[1])"
+        default:
+            return items.dropLast().joined(separator: ", ") + " and " + items.last!
+        }
     }
 }

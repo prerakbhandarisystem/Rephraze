@@ -41,13 +41,13 @@ public enum Settings {
     /// are someone else's categories; the thing that makes writing sound like
     /// you is too specific to fit in a menu -- how long your sentences run,
     /// whether you swear, that you never use exclamation marks.
-    public static var voice: String {
+    public static var style: String {
         get { defaults.string(forKey: Key.voice) ?? "" }
         set { defaults.set(newValue, forKey: Key.voice) }
     }
 
     /// Switch the personal voice off without throwing away what was written.
-    public static var voiceEnabled: Bool {
+    public static var styleEnabled: Bool {
         get { defaults.object(forKey: Key.voiceEnabled) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.voiceEnabled) }
     }
@@ -56,14 +56,14 @@ public enum Settings {
     /// and revised later rather than restarted from nothing.
     ///
     /// A plain string-to-string dictionary, which UserDefaults stores natively.
-    public static var voiceAnswers: [String: String] {
-        get { defaults.dictionary(forKey: Key.voiceAnswers) as? [String: String] ?? [:] }
+    public static var styleAnswers: VoiceAnswers {
+        get { defaults.dictionary(forKey: Key.voiceAnswers) as? VoiceAnswers ?? [:] }
         set { defaults.set(newValue, forKey: Key.voiceAnswers) }
     }
 
     /// True when a rephrase should return one personalised rewrite instead of
     /// the four generic ones.
-    public static var usesPersonalVoice: Bool {
-        voiceEnabled && !voice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    public static var usesWritingStyle: Bool {
+        styleEnabled && !style.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
