@@ -36,9 +36,10 @@ public enum Prompt {
 
     /// One request returns all four rewrites as JSON.
     ///
-    /// Four separate calls would cost four times as much and could half-fail,
-    /// leaving the panel with gaps. One structured response either works or
-    /// does not.
+    /// Kept as the fallback path behind `Settings.useParallelVariants`. It is
+    /// cheaper by roughly a fifth, but nothing appears until every variant is
+    /// written -- see `singleVariantSystem` for the version that trades that
+    /// for speed.
     public static var variantsSystem: String {
         let menu = RephraseVariant.allCases
             .map { "- \"\($0.rawValue)\": \($0.instruction)" }
@@ -59,6 +60,65 @@ public enum Prompt {
             - No preamble, no explanation, no quotation marks wrapped around \
             the text. The value is the rewritten text and nothing else.
             - Every variant must be genuinely different from the others.
+            """
+    }
+
+    // MARK: - One variant per call
+
+    /// System prompt for a single variant, used by the parallel path.
+    ///
+    /// Deliberately not the four-key prompt with three keys removed: naming one
+    /// job keeps the model from hedging toward the others, and it is ~100
+    /// tokens shorter, which is what keeps four calls close to the cost of one.
+    public static func singleVariantSystem(for variant: RephraseVariant) -> String {
+        """
+        You rewrite text. \(variant.instruction)
+
+        Rules:
+        - Reply with ONLY the rewritten text. No preamble, no explanation, no \
+        quotation marks around it, no alternatives.
+        - Keep the original meaning. Do not add facts, opinions or detail.
+        - Keep the original language.
+        - Reproduce these EXACTLY: @mentions, #channels, URLs, email \
+        addresses, file paths, code, and :emoji_shortcodes:.
+        - Preserve the existing line breaks and list structure.
+        """
+    }
+
+    // MARK: - Your voice
+
+    /// One rewrite, in the user's own described voice.
+    ///
+    /// Their description goes in the middle, and the structural rules come
+    /// after it. That ordering is deliberate: whatever someone writes about
+    /// their voice, the rewrite still has to be only the text, still has to
+    /// keep their @mentions intact, and still must not invent facts. Those
+    /// rules are what make it safe to paste straight back into their app, so
+    /// they get the last word.
+    public static func personalSystem(voice: String) -> String {
+        let described = voice.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return """
+            You rewrite text so that it sounds like one specific person.
+
+            This is how they describe their own voice:
+            \"\"\"
+            \(described)
+            \"\"\"
+
+            Rewrite the text to match that voice as closely as you can.
+
+            These rules always apply, even if the description above suggests \
+            otherwise:
+            - Reply with ONLY the rewritten text. No preamble, no explanation, \
+            no quotation marks around it, no alternatives, no commentary on \
+            the voice.
+            - Keep the original meaning. Do not add facts, opinions or detail \
+            that were not there.
+            - Keep the original language.
+            - Reproduce these EXACTLY: @mentions, #channels, URLs, email \
+            addresses, file paths, code, and :emoji_shortcodes:.
+            - Preserve the existing line breaks and list structure.
             """
     }
 }

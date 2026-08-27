@@ -38,11 +38,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusMenu.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
+        statusMenu.onOpenVoice = { [weak self] in self?.settingsWindow.show(tab: .voice) }
         settingsWindow.history = history
         onboarding.onGranted = { [weak self] in self?.startListening() }
 
         panel.model.onChoose = { [weak self] variant, text in
-            self?.apply(variant: variant, text: text)
+            self?.apply(label: variant.title, text: text)
+        }
+        panel.model.onChoosePersonal = { [weak self] text in
+            self?.apply(label: "your voice", text: text)
         }
         panel.model.onCancel = { [weak self] in self?.dismissPanel() }
 
@@ -225,6 +229,87 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let original = capture.text
         let appName = capture.field.appName
         let model = Settings.model
+        let started = Date()
+
+        // A described voice replaces the four-way choice entirely: they have
+        // already said how they want to sound, so asking again is a step
+        // backwards.
+        if Settings.usesPersonalVoice {
+            let voice = Settings.voice
+            panel.model.beginPersonal(original: original)
+
+            activeRephrase = Task { [weak self] in
+                guard let self else { return }
+                var sawText = false
+                do {
+                    for try await delta in openAI.rephrasePersonal(
+                        text: original, voice: voice, model: model, apiKey: apiKey
+                    ) {
+                        if Task.isCancelled { return }
+                        if !sawText {
+                            sawText = true
+                            Log.rewrite.notice(
+                                "First text after \(Int(Date().timeIntervalSince(started) * 1000))ms"
+                            )
+                        }
+                        await self.panel.model.appendPersonal(delta)
+                    }
+
+                    guard !Task.isCancelled else { return }
+                    await self.finishPersonal(
+                        original: original, appName: appName, started: started
+                    )
+                } catch is CancellationError {
+                    return
+                } catch {
+                    await self.showFailure(error.localizedDescription)
+                }
+            }
+            return
+        }
+
+        if Settings.useParallelVariants {
+            panel.model.beginStreaming(original: original)
+
+            activeRephrase = Task { [weak self] in
+                guard let self else { return }
+                var firstAt: TimeInterval?
+
+                for await event in openAI.rephraseVariantsStreaming(
+                    text: original, model: model, apiKey: apiKey
+                ) {
+                    if Task.isCancelled { return }
+
+                    switch event {
+                    case let .delta(variant, chunk):
+                        // Time to first visible word -- the number that decides
+                        // whether this feels fast.
+                        if firstAt == nil {
+                            let ms = Int(Date().timeIntervalSince(started) * 1000)
+                            firstAt = Double(ms)
+                            Log.rewrite.notice("First text after \(ms)ms")
+                        }
+                        await self.panel.model.append(chunk, to: variant)
+
+                    case let .finished(variant):
+                        await self.panel.model.complete(variant)
+
+                    case let .failed(variant, message):
+                        Log.rewrite.error("""
+                            \(variant.rawValue, privacy: .public) failed: \
+                            \(message, privacy: .public)
+                            """)
+                        await self.panel.model.fail(variant, message: message)
+                    }
+                }
+
+                guard !Task.isCancelled else { return }
+                await self.finishStreaming(
+                    original: original, appName: appName, started: started
+                )
+            }
+            return
+        }
 
         activeRephrase = Task { [weak self] in
             do {
@@ -234,7 +319,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let set, !Task.isCancelled else { return }
 
                 Log.rewrite.notice("""
-                    Got \(set.available.count) variants for \(original.count) chars                     from \(appName, privacy: .public)
+                    Got \(set.available.count) variants for \(original.count) chars \
+                    from \(appName, privacy: .public) \
+                    in \(Int(Date().timeIntervalSince(started) * 1000))ms
                     """)
 
                 await self?.showVariants(set)
@@ -244,6 +331,58 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 await self?.showFailure(error.localizedDescription)
             }
         }
+    }
+
+    /// The personalised rewrite finished streaming.
+    @MainActor
+    private func finishPersonal(original: String, appName: String, started: Date) {
+        panel.model.completePersonal()
+
+        guard panel.model.personalIsChoosable else {
+            showFailure("OpenAI returned nothing.")
+            return
+        }
+
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        Log.rewrite.notice("""
+            Personal rewrite of \(original.count) chars \
+            from \(appName, privacy: .public) in \(elapsed)ms
+            """)
+
+        statusMenu.setLastCapture(
+            summary: "Ready in your voice — press 1",
+            preview: Self.preview(of: panel.model.personalText)
+        )
+    }
+
+    /// Every variant has landed or failed.
+    @MainActor
+    private func finishStreaming(original: String, appName: String, started: Date) {
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        let usable = RephraseVariant.allCases.filter {
+            panel.model.slots[$0]?.isChoosable ?? false
+        }
+
+        // Every one failed -- almost always a bad key or no network, so show the
+        // reason rather than four empty rows.
+        guard !usable.isEmpty else {
+            let reason = RephraseVariant.allCases
+                .compactMap { panel.model.slots[$0]?.error }
+                .first ?? "OpenAI returned nothing."
+            showFailure(reason)
+            return
+        }
+
+        Log.rewrite.notice("""
+            \(usable.count) of 4 variants for \(original.count) chars \
+            from \(appName, privacy: .public) in \(elapsed)ms
+            """)
+
+        statusMenu.setLastCapture(
+            summary: "\(usable.count) versions ready — press 1–4",
+            preview: usable.first.flatMap { panel.model.slots[$0] }
+                .map { Self.preview(of: $0.text) }
+        )
     }
 
     @MainActor
@@ -264,9 +403,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// The user picked one. Put it back where it came from.
+    ///
+    /// `label` is only for the log and the status menu -- "Polished", or
+    /// "your voice" on the personalised path.
     @MainActor
-    private func apply(variant: RephraseVariant, text: String) {
+    private func apply(label: String, text: String) {
         guard let field = pendingField else { return }
+
+        // Read before dismissing: the panel owns the original text.
+        let original = panel.model.currentOriginal
 
         // Close first: the panel sits over the text, and the paste path needs
         // the source app unobstructed.
@@ -282,18 +427,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             default: how = "accessibility"
             }
             Log.capture.notice(
-                "Applied \(variant.rawValue, privacy: .public) via \(how, privacy: .public)"
+                "Applied \(label, privacy: .public) via \(how, privacy: .public)"
             )
 
             let record = RephraseRecord(
-                original: panelOriginal,
+                original: original,
                 rewritten: text,
                 appName: field.appName,
                 accepted: true
             )
             history.add(record)
             statusMenu.setLastCapture(
-                summary: "Applied \(variant.title) in \(field.appName)",
+                summary: "Applied \(label) in \(field.appName)",
                 preview: Self.preview(of: text)
             )
             statusMenu.flashTap(success: true)
@@ -306,12 +451,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         settingsWindow.refreshIfVisible()
         pendingField = nil
-    }
-
-    /// Original text of whatever the panel is currently showing.
-    private var panelOriginal: String {
-        if case let .ready(set) = panel.model.state { return set.original }
-        return ""
     }
 
     @MainActor

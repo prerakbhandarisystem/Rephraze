@@ -52,6 +52,40 @@ public final class OpenAIClient {
                         text: text,
                         model: model,
                         apiKey: apiKey,
+                        system: Prompt.system,
+                        temperature: 0.4,
+                        onDelta: { continuation.yield($0) }
+                    )
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Stream one rewrite in the user's own described voice.
+    ///
+    /// Deliberately a single call: once someone has told us how they want to
+    /// sound, offering four alternatives is asking a question they already
+    /// answered.
+    public func rephrasePersonal(
+        text: String,
+        voice: String,
+        model: String = Settings.model,
+        apiKey: String
+    ) -> AsyncThrowingStream<String, Error> {
+
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await self.run(
+                        text: text,
+                        model: model,
+                        apiKey: apiKey,
+                        system: Prompt.personalSystem(voice: voice),
+                        temperature: 0.4,
                         onDelta: { continuation.yield($0) }
                     )
                     continuation.finish()
@@ -145,10 +179,80 @@ public final class OpenAIClient {
         return result
     }
 
+    // MARK: - Four variants, in parallel
+
+    /// What the parallel path reports back as it goes.
+    public enum VariantEvent: Sendable {
+        /// More text for one variant. Arrives while it is still being written.
+        case delta(RephraseVariant, String)
+        /// That variant is complete.
+        case finished(RephraseVariant)
+        /// That variant alone failed. The other three are unaffected.
+        case failed(RephraseVariant, String)
+    }
+
+    /// Ask for the four rewrites as four concurrent streamed calls.
+    ///
+    /// Slower in total tokens, faster in every way the user can perceive: the
+    /// single-call path writes all four variants into one response serially, so
+    /// nothing can be shown until the last one lands. Here each variant streams
+    /// into its own card, and wall-clock time is the slowest single rewrite
+    /// rather than the sum of four.
+    ///
+    /// One variant failing is survivable and reported per variant -- the panel
+    /// keeps the rest.
+    public func rephraseVariantsStreaming(
+        text: String,
+        model: String = Settings.model,
+        apiKey: String
+    ) -> AsyncStream<VariantEvent> {
+
+        AsyncStream { continuation in
+            let task = Task {
+                await withTaskGroup(of: Void.self) { group in
+                    for variant in RephraseVariant.allCases {
+                        group.addTask {
+                            do {
+                                try await self.run(
+                                    text: text,
+                                    model: model,
+                                    apiKey: apiKey,
+                                    system: Prompt.singleVariantSystem(for: variant),
+                                    temperature: 0.5,
+                                    onDelta: { continuation.yield(.delta(variant, $0)) }
+                                )
+                                continuation.yield(.finished(variant))
+                            } catch is CancellationError {
+                                // Panel dismissed. Say nothing.
+                            } catch {
+                                continuation.yield(
+                                    .failed(variant, error.localizedDescription)
+                                )
+                            }
+                        }
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Ceiling on completion length, scaled to the input.
+    ///
+    /// Generous on purpose -- this is a runaway guard, not a length control.
+    /// Cutting a rewrite off mid-sentence would be worse than a slow one.
+    static func tokenBudget(for text: String) -> Int {
+        let approxInputTokens = max(1, text.count / 4)
+        return min(4096, max(256, approxInputTokens * 3))
+    }
+
     private func run(
         text: String,
         model: String,
         apiKey: String,
+        system: String,
+        temperature: Double,
         onDelta: @escaping (String) -> Void
     ) async throws {
 
@@ -162,9 +266,13 @@ public final class OpenAIClient {
             "model": model,
             "stream": true,
             // Low but not zero: rephrasing wants a little freedom, not invention.
-            "temperature": 0.4,
+            "temperature": temperature,
+            // A rewrite is never much longer than its input. Without a cap, one
+            // confused response can run for thousands of tokens while the user
+            // watches a spinner.
+            "max_tokens": Self.tokenBudget(for: text),
             "messages": [
-                ["role": "system", "content": Prompt.system],
+                ["role": "system", "content": system],
                 ["role": "user", "content": Prompt.user(text)],
             ],
         ]

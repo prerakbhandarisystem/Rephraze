@@ -18,6 +18,15 @@ public final class ResultPanel {
     private var panel: NSPanel?
     public let model = ResultPanelModel()
 
+    /// Where the panel's top-left corner should stay.
+    ///
+    /// AppKit positions windows by their bottom-left corner, so a panel that
+    /// grows -- which this one does constantly, as four variants stream in --
+    /// creeps upward over the very text it belongs to. Keeping the top edge
+    /// pinned instead means it grows downward, away from your writing.
+    private var anchorTopLeft: NSPoint?
+    private var resizeObserver: NSObjectProtocol?
+
     public var isVisible: Bool { panel?.isVisible ?? false }
 
     public init() {}
@@ -25,6 +34,8 @@ public final class ResultPanel {
     public func show(near field: FocusedField?) {
         let panel = existingOrNew()
 
+        // Lay out at the current content size before measuring.
+        panel.layoutIfNeeded()
         position(panel, near: field)
         // orderFrontRegardless, not makeKeyAndOrderFront: we want it visible
         // without becoming key.
@@ -33,6 +44,7 @@ public final class ResultPanel {
 
     public func hide() {
         panel?.orderOut(nil)
+        anchorTopLeft = nil
     }
 
     private func existingOrNew() -> NSPanel {
@@ -56,8 +68,26 @@ public final class ResultPanel {
         // Follow the user across Spaces rather than pinning to one.
         created.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
 
+        // The panel resizes on every streamed chunk. Re-pin the top each time.
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification,
+            object: created,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let panel = self.panel else { return }
+                self.keepTopEdgeFixed(panel)
+            }
+        }
+
         panel = created
         return created
+    }
+
+    deinit {
+        if let resizeObserver {
+            NotificationCenter.default.removeObserver(resizeObserver)
+        }
     }
 
     /// Put the panel just under the text box it belongs to, so the connection
@@ -72,16 +102,47 @@ public final class ResultPanel {
             // Screen coordinates from Accessibility are top-left origin; AppKit
             // is bottom-left. Convert using the primary screen's height.
             let screenHeight = NSScreen.screens.first?.frame.maxY ?? 0
-            anchor = NSPoint(
-                x: frame.minX,
-                y: screenHeight - frame.maxY - panelSize.height - 8
-            )
+
+            // The field, in AppKit coordinates.
+            let fieldBottom = screenHeight - frame.maxY
+            let fieldTop = screenHeight - frame.minY
+
+            let visible = (NSScreen.screens.first {
+                $0.frame.contains(NSPoint(x: frame.minX, y: fieldBottom))
+            } ?? NSScreen.main)?.visibleFrame ?? .zero
+
+            let roomBelow = fieldBottom - visible.minY - 8
+            let roomAbove = visible.maxY - fieldTop - 8
+
+            // Below the field by default -- it reads as belonging to it. But
+            // the panel is tall now, and a field near the bottom of the screen
+            // leaves nowhere to put it; flip above rather than cover the text
+            // the user is looking at.
+            if panelSize.height <= roomBelow || roomBelow >= roomAbove {
+                anchor = NSPoint(x: frame.minX, y: fieldBottom - panelSize.height - 8)
+            } else {
+                anchor = NSPoint(x: frame.minX, y: fieldTop + 8)
+            }
         } else {
             let mouse = NSEvent.mouseLocation
             anchor = NSPoint(x: mouse.x, y: mouse.y - panelSize.height - 12)
         }
 
-        panel.setFrameOrigin(clamp(anchor, size: panelSize))
+        // Remember the top edge, not the bottom.
+        let clamped = clamp(anchor, size: panelSize)
+        anchorTopLeft = NSPoint(x: clamped.x, y: clamped.y + panelSize.height)
+        panel.setFrameOrigin(clamped)
+    }
+
+    /// Re-apply the stored top-left after the content changes size.
+    private func keepTopEdgeFixed(_ panel: NSPanel) {
+        guard let anchorTopLeft else { return }
+        let size = panel.frame.size
+        let origin = NSPoint(x: anchorTopLeft.x, y: anchorTopLeft.y - size.height)
+        let clamped = clamp(origin, size: size)
+        if panel.frame.origin != clamped {
+            panel.setFrameOrigin(clamped)
+        }
     }
 
     /// Where the focused field is on screen, if it will tell us.

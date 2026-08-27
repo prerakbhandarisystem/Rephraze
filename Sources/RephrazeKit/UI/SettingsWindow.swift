@@ -15,12 +15,19 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
 
     /// Open the window.
     ///
-    /// - Parameter tab: which tab to land on. Defaults to History once a key is
-    ///   stored, because at that point the interesting content is what the app
-    ///   has been doing, not its configuration.
+    /// - Parameter tab: which tab to land on. Chosen by what is missing: no key
+    ///   means nothing works yet, no voice means the most valuable thing is
+    ///   still unset, and otherwise the interesting content is what the app has
+    ///   been doing.
     @MainActor
     public func show(tab: SettingsTab? = nil) {
-        let landing = tab ?? (Keychain.hasAPIKey ? SettingsTab.history : .general)
+        let landing = tab ?? {
+            if !Keychain.hasAPIKey { return SettingsTab.general }
+            if Settings.voice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return .voice
+            }
+            return .history
+        }()
 
         if let existing = window, let model {
             model.refresh()
