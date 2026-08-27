@@ -7,6 +7,33 @@ import SwiftUI
 /// comfortable to actually read -- a cramped panel forces a decision on a
 /// half-read sentence. Hence the width, the reading-sized body font, and the
 /// original kept visible at the top to compare against.
+/// The panel's colours, in one place.
+///
+/// A white panel cannot borrow the system's semantic colours: those flip with
+/// the user's appearance setting, and light-grey-on-white text is unreadable
+/// the moment someone switches to dark mode. So the panel fixes its own light
+/// palette and forces a light colour scheme over its contents, which also means
+/// every control inside -- including ones this file does not own -- resolves to
+/// dark-on-light rather than the reverse.
+enum PanelPalette {
+    /// The panel itself. Very slightly warm; pure #FFF next to macOS chrome
+    /// reads as a hole rather than a surface.
+    static let surface = Color(red: 0.996, green: 0.996, blue: 1.0)
+    /// Cards sitting on the surface.
+    static let card = Color(red: 0.969, green: 0.969, blue: 0.980)
+    static let cardHover = Color(red: 0.945, green: 0.945, blue: 0.988)
+    static let hairline = Color(red: 0.886, green: 0.886, blue: 0.906)
+
+    /// Body text. Near-black rather than black: pure #000 on white is harsh
+    /// over a long paragraph, which is exactly what this panel shows.
+    static let text = Color(red: 0.106, green: 0.110, blue: 0.129)
+    static let secondary = Color(red: 0.376, green: 0.388, blue: 0.427)
+    static let tertiary = Color(red: 0.549, green: 0.561, blue: 0.600)
+
+    /// The indigo from the app icon, so panel and icon are one product.
+    static let accent = Color(red: 0.361, green: 0.353, blue: 0.855)
+}
+
 struct ResultPanelView: View {
 
     @ObservedObject var model: ResultPanelModel
@@ -52,44 +79,22 @@ struct ResultPanelView: View {
         }
         .frame(width: panelWidth)
         .background {
-            // Thick material reads as a real floating surface rather than a
-            // translucent sheet over whatever happens to be behind it.
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.thickMaterial)
-                .overlay {
-                    // A barely-there tint from the top, so the panel has a
-                    // direction of light instead of sitting flat.
-                    LinearGradient(
-                        colors: [.white.opacity(0.10), .clear],
-                        startPoint: .top,
-                        endPoint: .center
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                }
+                .fill(PanelPalette.surface)
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
-            // Two hairlines: a light one to lift the top edge, a dark one to
-            // define the panel against a light background.
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [.white.opacity(0.28), .white.opacity(0.06)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: 1
-                )
+                .strokeBorder(PanelPalette.hairline, lineWidth: 1)
         }
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(.black.opacity(0.16), lineWidth: 0.5)
-                .blendMode(.multiply)
-        }
-        // Layered shadow: a tight contact shadow plus a wide soft one, which is
-        // what stops it looking like a rectangle with a blur behind it.
-        .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
-        .shadow(color: .black.opacity(0.26), radius: 40, y: 18)
+        // Layered shadow: a tight contact shadow under a wide soft one. On an
+        // opaque white panel this is the only thing separating it from a white
+        // window behind it, so it does more work here than it did before.
+        .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
+        .shadow(color: .black.opacity(0.20), radius: 36, y: 16)
+        // Everything inside is dark-on-light regardless of system appearance.
+        .environment(\.colorScheme, .light)
+        .tint(PanelPalette.accent)
         .animation(.smooth(duration: 0.22), value: model.stateID)
         .onAppear {
             withAnimation(.linear(duration: 1.15).repeatForever(autoreverses: false)) {
@@ -134,8 +139,8 @@ struct ResultPanelView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2.5)
-                        .background(.primary.opacity(0.07), in: Capsule())
-                        .overlay { Capsule().strokeBorder(.white.opacity(0.10), lineWidth: 0.5) }
+                        .background(PanelPalette.card, in: Capsule())
+                        .overlay { Capsule().strokeBorder(PanelPalette.hairline, lineWidth: 0.5) }
                 }
 
                 if let language = model.activeLanguage {
@@ -144,7 +149,7 @@ struct ResultPanelView: View {
                         .foregroundStyle(.tint)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(.tint.opacity(0.14), in: Capsule())
+                        .background(PanelPalette.accent.opacity(0.12), in: Capsule())
                 }
 
                 Spacer(minLength: 0)
@@ -179,14 +184,14 @@ struct ResultPanelView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(.primary.opacity(0.04))
+                        .fill(PanelPalette.card)
                 }
                 .overlay(alignment: .leading) {
                     UnevenRoundedRectangle(
                         topLeadingRadius: 7, bottomLeadingRadius: 7,
                         style: .continuous
                     )
-                    .fill(.primary.opacity(0.16))
+                    .fill(PanelPalette.accent.opacity(0.35))
                     .frame(width: 2.5)
                 }
             }
@@ -318,7 +323,7 @@ struct ResultPanelView: View {
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1.5)
-                                .background(.quaternary.opacity(0.7), in: Capsule())
+                                .background(Color.white, in: Capsule())
                         }
 
                         Spacer(minLength: 0)
@@ -339,12 +344,12 @@ struct ResultPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(isHovered ? AnyShapeStyle(.tint.opacity(0.13)) : AnyShapeStyle(.quaternary.opacity(0.35)))
+                    .fill(isHovered ? PanelPalette.cardHover : PanelPalette.card)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .strokeBorder(
-                        isHovered ? AnyShapeStyle(.tint.opacity(0.55)) : AnyShapeStyle(.clear),
+                        isHovered ? PanelPalette.accent.opacity(0.45) : PanelPalette.hairline,
                         lineWidth: 1
                     )
             )
@@ -410,13 +415,12 @@ struct ResultPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isHovered ? AnyShapeStyle(.tint.opacity(0.13))
-                                    : AnyShapeStyle(.quaternary.opacity(0.35)))
+                    .fill(isHovered ? PanelPalette.cardHover : PanelPalette.card)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(
-                        isHovered ? AnyShapeStyle(.tint.opacity(0.55)) : AnyShapeStyle(.clear),
+                        isHovered ? PanelPalette.accent.opacity(0.45) : PanelPalette.hairline,
                         lineWidth: 1
                     )
             )
@@ -480,13 +484,12 @@ struct ResultPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(isHovered ? AnyShapeStyle(.tint.opacity(0.13))
-                                    : AnyShapeStyle(.quaternary.opacity(0.35)))
+                    .fill(isHovered ? PanelPalette.cardHover : PanelPalette.card)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .strokeBorder(
-                        isHovered ? AnyShapeStyle(.tint.opacity(0.55)) : AnyShapeStyle(.clear),
+                        isHovered ? PanelPalette.accent.opacity(0.45) : PanelPalette.hairline,
                         lineWidth: 1
                     )
             )
@@ -531,15 +534,12 @@ struct ResultPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isHovered
-                          ? AnyShapeStyle(Color.accentColor.opacity(0.11))
-                          : AnyShapeStyle(.primary.opacity(choosable ? 0.055 : 0.028)))
+                    .fill(isHovered ? PanelPalette.cardHover : PanelPalette.card)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(
-                        isHovered ? AnyShapeStyle(Color.accentColor.opacity(0.50))
-                                  : AnyShapeStyle(.white.opacity(choosable ? 0.10 : 0.04)),
+                        isHovered ? PanelPalette.accent.opacity(0.45) : PanelPalette.hairline,
                         lineWidth: isHovered ? 1 : 0.5
                     )
             }
@@ -549,11 +549,11 @@ struct ResultPanelView: View {
                 UnevenRoundedRectangle(
                     topLeadingRadius: 12, bottomLeadingRadius: 12, style: .continuous
                 )
-                .fill(Color.accentColor)
+                .fill(PanelPalette.accent)
                 .frame(width: isHovered ? 3 : 0)
             }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .shadow(color: .black.opacity(isHovered ? 0.10 : 0), radius: 6, y: 2)
+            .shadow(color: .black.opacity(isHovered ? 0.07 : 0), radius: 6, y: 2)
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -574,32 +574,22 @@ struct ResultPanelView: View {
         Text("\(index)")
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .foregroundStyle(
-                highlighted ? AnyShapeStyle(.tint)
-                    : active ? AnyShapeStyle(.primary.opacity(0.75)) : AnyShapeStyle(.tertiary)
+                highlighted ? AnyShapeStyle(Color.white)
+                    : active ? AnyShapeStyle(PanelPalette.text) : AnyShapeStyle(PanelPalette.tertiary)
             )
             .frame(width: 24, height: 24)
             .background {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: highlighted
-                                ? [.accentColor.opacity(0.30), .accentColor.opacity(0.16)]
-                                : [.primary.opacity(active ? 0.13 : 0.05),
-                                   .primary.opacity(active ? 0.07 : 0.03)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
+                    .fill(highlighted ? PanelPalette.accent : Color.white)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .strokeBorder(
-                        highlighted ? Color.accentColor.opacity(0.45)
-                                    : .white.opacity(active ? 0.22 : 0.08),
+                        highlighted ? PanelPalette.accent : PanelPalette.hairline,
                         lineWidth: 0.75
                     )
             }
-            .shadow(color: .black.opacity(active ? 0.12 : 0), radius: 1, y: 0.5)
+            .shadow(color: .black.opacity(active ? 0.08 : 0), radius: 1, y: 0.5)
             .padding(.top, 1)
     }
 
@@ -618,11 +608,11 @@ struct ResultPanelView: View {
             Text(variant.title)
                 .font(.system(size: 12.5, weight: .semibold))
                 .kerning(-0.1)
-                .foregroundStyle(choosable ? .primary : .secondary)
+                .foregroundStyle(choosable ? PanelPalette.text : PanelPalette.tertiary)
 
             Text(variant.subtitle)
                 .font(.system(size: 10.5))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(PanelPalette.tertiary)
 
             // How much shorter or longer this option is. The reason to pick
             // "Concise" is usually the number, so show the number.
@@ -632,8 +622,8 @@ struct ResultPanelView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 5.5)
                     .padding(.vertical, 2)
-                    .background(.primary.opacity(0.07), in: Capsule())
-                    .overlay { Capsule().strokeBorder(.white.opacity(0.10), lineWidth: 0.5) }
+                    .background(Color.white, in: Capsule())
+                    .overlay { Capsule().strokeBorder(PanelPalette.hairline, lineWidth: 0.5) }
             }
 
             Spacer(minLength: 0)
@@ -655,9 +645,9 @@ struct ResultPanelView: View {
                 .fixedSize(horizontal: false, vertical: true)
         } else if hasText {
             Text(text)
-                .font(.system(size: 13.5))
-                .lineSpacing(4)
-                .foregroundStyle(isComplete ? .primary : .secondary)
+                .font(.system(size: 14))
+                .lineSpacing(5)
+                .foregroundStyle(isComplete ? PanelPalette.text : PanelPalette.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 // Arabic has to be laid out right to left, not merely rendered
                 // with its own glyphs: left-aligned Arabic wraps its lines from
@@ -686,13 +676,13 @@ struct ResultPanelView: View {
         GeometryReader { geo in
             let width = geo.size.width * widthFraction
             RoundedRectangle(cornerRadius: 4)
-                .fill(.primary.opacity(0.08))
+                .fill(PanelPalette.card)
                 .frame(width: width, height: 9)
                 .overlay {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(
                             LinearGradient(
-                                colors: [.clear, .primary.opacity(0.10), .clear],
+                                colors: [.clear, PanelPalette.hairline, .clear],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
@@ -762,7 +752,7 @@ struct ResultPanelView: View {
         .padding(.vertical, 10)
         .background(
             model.isEditing
-                ? AnyShapeStyle(.tint.opacity(0.07))
+                ? AnyShapeStyle(PanelPalette.accent.opacity(0.06))
                 : AnyShapeStyle(.clear)
         )
         .contentShape(Rectangle())
@@ -812,22 +802,16 @@ struct ResultPanelView: View {
         HStack(spacing: 5) {
             Text(key)
                 .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                .foregroundStyle(.primary.opacity(0.65))
+                .foregroundStyle(PanelPalette.secondary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2.5)
                 .background {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [.primary.opacity(0.11), .primary.opacity(0.06)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
+                        .fill(Color.white)
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+                        .strokeBorder(PanelPalette.hairline, lineWidth: 0.5)
                 }
             Text(label)
                 .font(.system(size: 11))

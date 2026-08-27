@@ -5,9 +5,10 @@
 // Generated rather than committed as binary art so it can be tweaked in one
 // place and re-rendered at every size macOS asks for. Run: make icon
 //
-// The mark is a wand crossing a line of text, which is the whole product in one
-// picture: your words, rewritten. It matches the menu bar glyph so the app is
-// recognisable in both places.
+// The mark is one stroke that starts jagged and resolves into a smooth curve:
+// rough writing in, clean writing out. Abstract on purpose -- it stays legible
+// at 16pt and does not compete with the literal wand in the menu bar, which is
+// a different job at a different size.
 
 import AppKit
 import Foundation
@@ -75,92 +76,60 @@ func draw(size S: CGFloat) -> NSImage {
     ctx.restoreGState()
 
     // MARK: The mark
+    //
+    // One continuous stroke that begins as hard angular zigzag and resolves
+    // into a smooth curve. That is the product in a single form: rough writing
+    // going in, clean writing coming out. No wand, no text lines, no sparkles --
+    // an abstract mark reads at 16pt and does not date, where an illustration
+    // turns to mush and looks like every other AI app.
 
     let u = box.width           // work in fractions of the inner box
     func x(_ f: CGFloat) -> CGFloat { box.minX + u * f }
     func y(_ f: CGFloat) -> CGFloat { box.minY + u * f }
 
-    // Two lines of "text", the lower one shorter -- a paragraph, abstracted.
-    // Dropped at 16pt, where they would collapse into grey mush.
-    if S >= 32 {
-        ctx.setFillColor(NSColor(white: 1, alpha: 0.42).cgColor)
-        let barHeight = u * 0.052
-        let barRadius = barHeight / 2
-        for (index, spec) in [(CGFloat(0.30), CGFloat(0.52)), (0.175, 0.40)].enumerated() {
-            let rect = CGRect(
-                x: x(0.185),
-                y: y(spec.0),
-                width: u * spec.1,
-                height: barHeight
-            )
-            ctx.addPath(CGPath(
-                roundedRect: rect,
-                cornerWidth: barRadius, cornerHeight: barRadius, transform: nil
-            ))
-            ctx.fillPath()
-            _ = index
-        }
+    // A damped wave: one continuous stroke that starts as a wide oscillation
+    // and settles almost flat. That is rephrasing -- the same line throughout,
+    // the same direction, just resolved by the end.
+    //
+    // Earlier attempts used hard mitred corners for the "rough" half. They
+    // produced spikes and read as a heartbeat, which is a different product
+    // entirely. Amplitude carries the meaning here; sharpness does not.
+    let mark = CGMutablePath()
+    mark.move(to: CGPoint(x: x(0.130), y: y(0.500)))
+
+    /// One half-oscillation, flat-to-flat, bulging by `amplitude`.
+    func wave(to endX: CGFloat, amplitude: CGFloat) {
+        let startX = mark.currentPoint.x
+        let span = endX - startX
+        mark.addCurve(
+            to: CGPoint(x: endX, y: y(0.500)),
+            control1: CGPoint(x: startX + span * 0.36, y: y(0.500) - box.minY + box.minY + amplitude),
+            control2: CGPoint(x: endX - span * 0.36, y: y(0.500) + amplitude)
+        )
     }
 
-    // The wand: a rounded bar running lower-left to upper-right.
+    wave(to: x(0.315), amplitude: u * 0.290)    // wide
+    wave(to: x(0.500), amplitude: -u * 0.245)
+    wave(to: x(0.675), amplitude: u * 0.145)    // narrowing
+    wave(to: x(0.875), amplitude: -u * 0.048)   // settles level, no final kink
+
     ctx.saveGState()
-    let wandWidth = u * 0.085
-    ctx.translateBy(x: box.midX, y: box.midY)
-    ctx.rotate(by: -.pi / 4)
-    // Length chosen so the tip lands exactly under the big sparkle's centre,
-    // which then covers it -- otherwise the bar pokes through the star.
-    let wandReach = u * 0.275
-    let wand = CGRect(
-        x: -wandWidth / 2,
-        y: -wandReach,
-        width: wandWidth,
-        height: wandReach * 2
-    )
-    ctx.addPath(CGPath(
-        roundedRect: wand,
-        cornerWidth: wandWidth / 2, cornerHeight: wandWidth / 2, transform: nil
-    ))
-    ctx.setFillColor(NSColor.white.cgColor)
-    ctx.fillPath()
+    ctx.setStrokeColor(NSColor.white.cgColor)
+    ctx.setLineWidth(u * 0.098)
+    ctx.setLineCap(.round)
+    ctx.setLineJoin(.round)
+
+    if S >= 128 {
+        ctx.setShadow(
+            offset: CGSize(width: 0, height: -S * 0.008),
+            blur: S * 0.020,
+            color: NSColor(white: 0, alpha: 0.18).cgColor
+        )
+    }
+
+    ctx.addPath(mark)
+    ctx.strokePath()
     ctx.restoreGState()
-
-    // MARK: Sparkles
-
-    /// A four-point star with concave sides.
-    func sparkle(cx: CGFloat, cy: CGFloat, r: CGFloat, alpha: CGFloat) {
-        let path = CGMutablePath()
-        let waist = r * 0.30            // how pinched the sides are
-        path.move(to: CGPoint(x: cx, y: cy + r))
-        path.addQuadCurve(
-            to: CGPoint(x: cx + r, y: cy),
-            control: CGPoint(x: cx + waist, y: cy + waist)
-        )
-        path.addQuadCurve(
-            to: CGPoint(x: cx, y: cy - r),
-            control: CGPoint(x: cx + waist, y: cy - waist)
-        )
-        path.addQuadCurve(
-            to: CGPoint(x: cx - r, y: cy),
-            control: CGPoint(x: cx - waist, y: cy - waist)
-        )
-        path.addQuadCurve(
-            to: CGPoint(x: cx, y: cy + r),
-            control: CGPoint(x: cx - waist, y: cy + waist)
-        )
-        path.closeSubpath()
-        ctx.addPath(path)
-        ctx.setFillColor(NSColor(white: 1, alpha: alpha).cgColor)
-        ctx.fillPath()
-    }
-
-    // The wand runs at -45 degrees from the centre, so its tip is exactly
-    // reach/sqrt(2) along both axes. Put the big sparkle there.
-    let tipOffset = 0.275 / 2.0.squareRoot()
-    sparkle(cx: x(0.5 + tipOffset), cy: y(0.5 + tipOffset), r: u * 0.135, alpha: 1.0)
-    if S >= 32 {
-        sparkle(cx: x(0.845), cy: y(0.505), r: u * 0.055, alpha: 0.92)
-        sparkle(cx: x(0.545), cy: y(0.865), r: u * 0.042, alpha: 0.78)
-    }
 
     image.unlockFocus()
     return image
