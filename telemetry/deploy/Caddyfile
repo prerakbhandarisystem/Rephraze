@@ -1,0 +1,22 @@
+# Caddy sits in front and does two jobs: it gets an HTTPS certificate on its
+# own and renews it forever, and it passes requests to the usage server, which
+# only listens on localhost.
+#
+#   sudo cp Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# Change the name below to the subdomain you pointed at this machine.
+
+usage.example.com {
+    reverse_proxy 127.0.0.1:8787
+
+    # The app posts small batches; nothing legitimate is near this.
+    request_body {
+        max_size 256KB
+    }
+
+    encode gzip
+    log {
+        output file /var/log/caddy/rephraze-usage.log
+    }
+}

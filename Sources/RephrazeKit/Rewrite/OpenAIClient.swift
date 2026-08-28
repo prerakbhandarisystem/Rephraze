@@ -51,11 +51,13 @@ public final class OpenAIClient {
             let task = Task {
                 do {
                     try await self.run(
-                        text: text,
+                        messages: Self.rewriteMessages(
+                            system: Prompt.personalSystem(style: style), text: text
+                        ),
                         model: model,
                         apiKey: apiKey,
-                        system: Prompt.personalSystem(style: style),
                         temperature: 0.4,
+                        maxTokens: Self.tokenBudget(for: text),
                         onDelta: { continuation.yield($0) }
                     )
                     continuation.finish()
@@ -184,11 +186,14 @@ public final class OpenAIClient {
                         group.addTask {
                             do {
                                 try await self.run(
-                                    text: text,
+                                    messages: Self.rewriteMessages(
+                                        system: Prompt.singleVariantSystem(for: variant),
+                                        text: text
+                                    ),
                                     model: model,
                                     apiKey: apiKey,
-                                    system: Prompt.singleVariantSystem(for: variant),
                                     temperature: 0.5,
+                                    maxTokens: Self.tokenBudget(for: text),
                                     onDelta: { continuation.yield(.delta(variant, $0)) }
                                 )
                                 continuation.yield(.finished(variant))
@@ -203,6 +208,46 @@ public final class OpenAIClient {
                     }
                 }
                 continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    // MARK: - Refining, in conversation
+
+    /// Stream the next rewrite in a follow-up conversation.
+    ///
+    /// The whole exchange goes up each time rather than just the newest
+    /// instruction -- see `Conversation` for why that is the difference between
+    /// a conversation and four unrelated rewrites.
+    ///
+    /// The budget is sized against the original, not the transcript: however
+    /// long the conversation gets, the reply is still one rewrite of one piece
+    /// of text.
+    public func refine(
+        conversation: Conversation,
+        style: String,
+        model: String = Settings.model,
+        apiKey: String
+    ) -> AsyncThrowingStream<String, Error> {
+
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await self.run(
+                        messages: conversation.messages(
+                            system: Prompt.chatSystem(style: style)
+                        ),
+                        model: model,
+                        apiKey: apiKey,
+                        temperature: 0.4,
+                        maxTokens: Self.tokenBudget(for: conversation.original),
+                        onDelta: { continuation.yield($0) }
+                    )
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
             }
             continuation.onTermination = { _ in task.cancel() }
         }
@@ -230,10 +275,11 @@ public final class OpenAIClient {
             let task = Task {
                 do {
                     try await self.run(
-                        text: text,
+                        messages: Self.rewriteMessages(
+                            system: Prompt.translateSystem(to: language), text: text
+                        ),
                         model: model,
                         apiKey: apiKey,
-                        system: Prompt.translateSystem(to: language),
                         temperature: 0.4,
                         maxTokens: Self.translationBudget(for: text),
                         onDelta: { continuation.yield($0) }
@@ -269,13 +315,20 @@ public final class OpenAIClient {
         min(4096, tokenBudget(for: text) * 2)
     }
 
+    /// The usual two-message shape: how to rewrite, then what to rewrite.
+    private static func rewriteMessages(system: String, text: String) -> [ChatMessage] {
+        [
+            ChatMessage(role: "system", content: system),
+            ChatMessage(role: "user", content: text),
+        ]
+    }
+
     private func run(
-        text: String,
+        messages: [ChatMessage],
         model: String,
         apiKey: String,
-        system: String,
         temperature: Double,
-        maxTokens: Int? = nil,
+        maxTokens: Int,
         onDelta: @escaping (String) -> Void
     ) async throws {
 
@@ -293,11 +346,8 @@ public final class OpenAIClient {
             // A rewrite is never much longer than its input. Without a cap, one
             // confused response can run for thousands of tokens while the user
             // watches a spinner.
-            "max_tokens": maxTokens ?? Self.tokenBudget(for: text),
-            "messages": [
-                ["role": "system", "content": system],
-                ["role": "user", "content": text],
-            ],
+            "max_tokens": maxTokens,
+            "messages": messages.map(\.payload),
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 

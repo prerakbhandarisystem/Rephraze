@@ -133,21 +133,3 @@ struct PromptGuardrailTests {
         #expect(prompt.contains("override anything above that conflicts"))
     }
 }
-
-@Suite("Follow-up instructions fold into the style")
-struct RefineCombineTests {
-
-    @Test("With no saved style, the instruction stands alone")
-    func noStyle() {
-        #expect(Prompt.combining(style: "", instruction: "Shorter") == "Shorter")
-        #expect(Prompt.combining(style: "   ", instruction: "Shorter") == "Shorter")
-    }
-
-    @Test("The instruction comes last, so it wins on conflict")
-    func instructionWins() {
-        let combined = Prompt.combining(style: "Be formal.", instruction: "Be casual.")
-        #expect(combined.range(of: "Be formal.")!.lowerBound
-                < combined.range(of: "Be casual.")!.lowerBound)
-        #expect(combined.contains("For this rewrite specifically"))
-    }
-}

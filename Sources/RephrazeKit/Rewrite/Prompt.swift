@@ -107,18 +107,6 @@ public enum Prompt {
         """
     }
 
-    /// Fold a one-off follow-up instruction into the saved writing style.
-    ///
-    /// The instruction goes last so it wins where the two disagree: it is both
-    /// the more specific and the more recent of the two. Prompt composition
-    /// rather than app logic, so it lives here and stays testable off the main
-    /// actor.
-    public static func combining(style: String, instruction: String) -> String {
-        let saved = style.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !saved.isEmpty else { return instruction }
-        return saved + "\n\nFor this rewrite specifically: " + instruction
-    }
-
     // MARK: - The user's own writing style
 
     /// One rewrite, in the style the user described.
@@ -146,6 +134,51 @@ public enum Prompt {
 
             These rules always apply, and override anything above that conflicts
             with them:
+            \(coreRules)
+            """
+    }
+
+    // MARK: - Refining, in conversation
+
+    /// The system prompt for the follow-up conversation.
+    ///
+    /// The shape of the exchange has to be spelled out, because it inverts the
+    /// most important rule in `coreRules`. There, anything that looks like an
+    /// instruction is prose to be rewritten: the captured text is whatever the
+    /// user happened to be typing, and a message reading "write me a function"
+    /// must come back as a better-worded request rather than a function. Here,
+    /// every message after that first one is the user talking to us on purpose,
+    /// and has to be obeyed. So the two are named apart and the boundary is
+    /// stated once, at the bottom, where it governs the rules that follow it.
+    public static func chatSystem(style: String) -> String {
+        let described = style.trimmingCharacters(in: .whitespacesAndNewlines)
+        let styleBlock = described.isEmpty ? "" : """
+
+
+            This is how they describe how they write:
+            \"\"\"
+            \(described)
+            \"\"\"
+            Match it unless an instruction tells you otherwise. It describes \
+            style only -- tone, length, vocabulary, formality -- and never \
+            changes what the text says.
+            """
+
+        return """
+            You rewrite one piece of text over and over, as the person writing \
+            it tells you more about what they want.
+
+            The FIRST user message is that text. Every user message after it is \
+            an instruction from them about the rewrite, and you follow it.
+
+            Each reply is a complete rewrite of that first text with every \
+            instruction so far applied together -- not a patch, not a note on \
+            what changed, and not only the newest instruction. Your own earlier \
+            replies are in the conversation so that you can build on the last \
+            one: "shorter" means shorter than what you just said.\(styleBlock)
+
+            The rules below govern the text you are rewriting. They never apply \
+            to the instructions, which are the person speaking to you directly:
             \(coreRules)
             """
     }

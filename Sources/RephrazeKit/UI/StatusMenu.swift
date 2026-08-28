@@ -27,10 +27,16 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
 
     public var onOpenSettings: () -> Void = {}
     public var onOpenStyle: () -> Void = {}
+    public var onOpenSupport: () -> Void = {}
 
-    private static let idleSymbol = "wand.and.sparkles"
+    /// Idle is the app's own mark; the two flash states are system symbols,
+    /// because "it worked" and "not here" are conventions worth borrowing
+    /// rather than redrawing.
     private static let activeSymbol = "checkmark.circle.fill"
     private static let rejectedSymbol = "slash.circle"
+
+    /// Menu bar images are measured in the 18pt slot macOS gives them.
+    private static let idleImage = RephrazeMark.templateImage(size: 18)
 
     public override init() {
         super.init()
@@ -38,7 +44,7 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
 
     public func install() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = Self.symbol(Self.idleSymbol)
+        item.button?.image = Self.idleImage
         item.menu = buildMenu()
         statusItem = item
     }
@@ -63,7 +69,7 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
         )
 
         let restore = DispatchWorkItem { [weak self] in
-            self?.statusItem?.button?.image = Self.symbol(Self.idleSymbol)
+            self?.statusItem?.button?.image = Self.idleImage
         }
         flashWorkItem = restore
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: restore)
@@ -143,6 +149,16 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
         settings.target = self
         menu.addItem(settings)
 
+        // Sits with Settings rather than next to Quit: something being wrong is
+        // exactly when this menu gets opened, and it should not need hunting for.
+        let support = NSMenuItem(
+            title: "Report a problem…",
+            action: #selector(handleOpenSupport),
+            keyEquivalent: ""
+        )
+        support.target = self
+        menu.addItem(support)
+
         menu.addItem(.separator())
 
         menu.addItem(NSMenuItem(
@@ -192,6 +208,10 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
 
     @objc private func handleOpenSettings() {
         onOpenSettings()
+    }
+
+    @objc private func handleOpenSupport() {
+        onOpenSupport()
     }
 
     @objc private func handlePermissionClick() {

@@ -8,6 +8,9 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
     private var model: SettingsModel?
 
     public var history: HistoryStore?
+    /// The app's one reporter. Sharing the instance matters: two of them would
+    /// keep two queues over the same file and lose each other's events.
+    public var telemetry: Telemetry?
 
     public override init() {
         super.init()
@@ -20,9 +23,9 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
     ///   still unset, and otherwise the interesting content is what the app has
     ///   been doing.
     @MainActor
-    public func show(tab: SettingsTab? = nil) {
-        let landing = tab ?? {
-            if !Keychain.hasAPIKey { return SettingsTab.general }
+    public func show(section: SettingsSection? = nil) {
+        let landing = section ?? {
+            if !Keychain.hasAPIKey { return SettingsSection.general }
             if Settings.style.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return .style
             }
@@ -31,19 +34,19 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
 
         if let existing = window, let model {
             model.refresh()
-            model.selectedTab = landing
+            model.selectedSection = landing
             existing.makeKeyAndOrderFront(nil)
             existing.orderFrontRegardless()
             NSApp.activate(ignoringOtherApps: true)
             return
         }
 
-        guard let history else { return }
+        guard let history, let telemetry else { return }
 
         NSApp.setActivationPolicy(.regular)
 
-        let model = SettingsModel(history: history)
-        model.selectedTab = landing
+        let model = SettingsModel(history: history, telemetry: telemetry)
+        model.selectedSection = landing
         self.model = model
 
         let root = SettingsView(model: model) { [weak self] in

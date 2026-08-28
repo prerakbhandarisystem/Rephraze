@@ -1,0 +1,44 @@
+# Keeps the usage server running, and starts it again after a reboot or a crash.
+#   sudo cp rephraze-usage.service /etc/systemd/system/
+#   sudo systemctl enable --now rephraze-usage
+
+[Unit]
+Description=Rephraze usage backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rephraze
+Group=rephraze
+WorkingDirectory=/opt/rephraze
+
+# An absolute path on purpose. Left relative, the database would be created
+# wherever systemd happened to start the process -- which is not here.
+Environment=REPHRAZE_DB=/var/lib/rephraze/usage.db
+
+# Listens only on localhost. Caddy is the only thing that talks to it, and it
+# is the only thing holding a certificate.
+Environment=REPHRAZE_HOST=127.0.0.1
+Environment=REPHRAZE_PORT=8787
+
+# The dashboard token lives here, not in this file -- unit files are readable
+# by anyone on the box. Create it with chmod 600. See the README.
+EnvironmentFile=/etc/rephraze/usage.env
+
+ExecStart=/usr/bin/python3 /opt/rephraze/server.py
+Restart=always
+RestartSec=5
+
+# The database is the only thing on this machine it has any business touching.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/rephraze
+
+[Install]
+WantedBy=multi-user.target

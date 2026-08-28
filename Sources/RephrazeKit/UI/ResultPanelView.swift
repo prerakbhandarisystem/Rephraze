@@ -1,5 +1,69 @@
 import SwiftUI
 
+/// The surface every selectable row in the panel sits on.
+///
+/// Defined once. It used to be written out at each card, which is not just
+/// extra code but actively misleading: a styling change applied to one copy
+/// looks like a change that did not work, because the other three still show
+/// the old treatment. That happened.
+fileprivate struct PanelCardSurface: ViewModifier {
+
+    /// Rows are either full-width prose or a cell in the ten-language grid.
+    /// Those genuinely want different density, so it is a named choice rather
+    /// than four sets of numbers that drifted apart.
+    enum Density {
+        case standard, compact
+
+        var horizontal: CGFloat { self == .standard ? 13 : 10 }
+        var vertical: CGFloat { self == .standard ? 11 : 8 }
+        var radius: CGFloat { self == .standard ? 12 : 10 }
+    }
+
+    var isHovered: Bool
+    var density: Density
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: density.radius, style: .continuous)
+
+        return content
+            .padding(.horizontal, density.horizontal)
+            .padding(.vertical, density.vertical)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background { shape.fill(isHovered ? PanelPalette.cardHover : PanelPalette.card) }
+            .overlay {
+                shape.strokeBorder(
+                    isHovered ? PanelPalette.accent.opacity(0.45) : PanelPalette.hairline,
+                    lineWidth: isHovered ? 1 : 0.5
+                )
+            }
+            // An accent rail on the hovered row. A tint alone is easy to miss
+            // against arbitrary content behind the panel; an edge is not.
+            .overlay(alignment: .leading) {
+                UnevenRoundedRectangle(
+                    topLeadingRadius: density.radius,
+                    bottomLeadingRadius: density.radius,
+                    style: .continuous
+                )
+                .fill(PanelPalette.accent)
+                .frame(width: isHovered ? 3 : 0)
+            }
+            .clipShape(shape)
+            .shadow(color: .black.opacity(isHovered ? 0.07 : 0), radius: 6, y: 2)
+            .contentShape(shape)
+            .animation(.easeOut(duration: 0.12), value: isHovered)
+    }
+}
+
+extension View {
+    /// Draw this row as a selectable card in the result panel.
+    fileprivate func panelCard(
+        isHovered: Bool,
+        density: PanelCardSurface.Density = .standard
+    ) -> some View {
+        modifier(PanelCardSurface(isHovered: isHovered, density: density))
+    }
+}
+
 /// The floating picker: four rewrites, pick one.
 ///
 /// ## Sized to be read, not just glanced at
@@ -39,6 +103,7 @@ struct ResultPanelView: View {
     @ObservedObject var model: ResultPanelModel
     @State private var hovered: RephraseVariant?
     @State private var hoveredLanguage: TargetLanguage?
+    @State private var hoveredTurn: UUID?
     @FocusState private var inputFocused: Bool
     /// Drives the placeholder sweep while variants are still arriving.
     @State private var shimmer = false
@@ -108,10 +173,9 @@ struct ResultPanelView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                // The mark, on a tinted chip -- the same wand as the app icon
-                // and the menu bar, so all three read as one thing.
-                Image(systemName: "wand.and.sparkles")
-                    .font(.system(size: 11, weight: .semibold))
+                // The mark, on a tinted chip -- the same damped wave the app
+                // icon and the menu bar draw, so they read as one thing.
+                RephrazeMarkView(size: 16)
                     .foregroundStyle(.white)
                     .frame(width: 20, height: 20)
                     .background {
@@ -238,6 +302,9 @@ struct ResultPanelView: View {
             }
             .frame(maxHeight: maxListHeight)
 
+        case .chat:
+            chatTranscript
+
         case .languages:
             languageList
 
@@ -339,21 +406,7 @@ struct ResultPanelView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(isHovered ? PanelPalette.cardHover : PanelPalette.card)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .strokeBorder(
-                        isHovered ? PanelPalette.accent.opacity(0.45) : PanelPalette.hairline,
-                        lineWidth: 1
-                    )
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .panelCard(isHovered: isHovered)
         }
         .buttonStyle(.plain)
         .disabled(!ready)
@@ -410,21 +463,7 @@ struct ResultPanelView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isHovered ? PanelPalette.cardHover : PanelPalette.card)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(
-                        isHovered ? PanelPalette.accent.opacity(0.45) : PanelPalette.hairline,
-                        lineWidth: 1
-                    )
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .panelCard(isHovered: isHovered, density: .compact)
         }
         .buttonStyle(.plain)
         .onHover { hoveredLanguage = $0 ? language : nil }
@@ -479,26 +518,154 @@ struct ResultPanelView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(isHovered ? PanelPalette.cardHover : PanelPalette.card)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .strokeBorder(
-                        isHovered ? PanelPalette.accent.opacity(0.45) : PanelPalette.hairline,
-                        lineWidth: 1
-                    )
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .panelCard(isHovered: isHovered)
         }
         .buttonStyle(.plain)
         .disabled(!ready)
         .onHover { hoveredLanguage = $0 ? language : nil }
         .animation(.easeOut(duration: 0.14), value: model.translationComplete)
+    }
+
+    // MARK: - The conversation
+
+    /// The exchange so far: what you asked for, and what came back.
+    ///
+    /// Scrolled to the newest turn as it arrives, including while it is still
+    /// streaming. The panel grows to fit and only starts scrolling once it runs
+    /// out of screen, so a short conversation is simply all visible.
+    private var chatTranscript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(model.chat.turns.enumerated()), id: \.element.id) { index, turn in
+                        chatRow(turn, isLatest: index == model.chat.turns.count - 1)
+                            .id(turn.id)
+                    }
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 10)
+            }
+            .frame(maxHeight: maxListHeight)
+            // No animation on either: this fires once per streamed chunk, and
+            // an animated scroll per token never finishes one before the next
+            // begins, which reads as the text sliding around rather than
+            // arriving.
+            .onChange(of: model.chat.turns.count) { _, _ in scrollToLatest(proxy) }
+            .onChange(of: model.chat.turns.last?.text) { _, _ in scrollToLatest(proxy) }
+        }
+    }
+
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+        guard let last = model.chat.turns.last else { return }
+        proxy.scrollTo(last.id, anchor: .bottom)
+    }
+
+    @ViewBuilder
+    private func chatRow(_ turn: ChatTurn, isLatest: Bool) -> some View {
+        switch turn.speaker {
+        case .you: askedRow(turn)
+        case .rephraze: repliedRow(turn, isLatest: isLatest)
+        }
+    }
+
+    /// What the user asked for.
+    ///
+    /// Tinted and set to the right, so running an eye down the transcript
+    /// separates the two voices without having to read either of them.
+    private func askedRow(_ turn: ChatTurn) -> some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 72)
+
+            Text(turn.text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(PanelPalette.text)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    PanelPalette.accent.opacity(0.13),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(PanelPalette.accent.opacity(0.22), lineWidth: 0.5)
+                }
+        }
+    }
+
+    /// A rewrite that takes the conversation so far into account.
+    ///
+    /// Only the newest one carries the `1` key and the label. The ones above it
+    /// are dimmed but still clickable: numbering a growing transcript would
+    /// move every key each time a message is sent, and this panel's one firm
+    /// rule is that the number beside a rewrite cannot move under your finger.
+    private func repliedRow(_ turn: ChatTurn, isLatest: Bool) -> some View {
+        let choosable = turn.isChoosable
+        let isHovered = hoveredTurn == turn.id && choosable
+
+        return Button {
+            model.choose(turn)
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                if isLatest {
+                    keycap(1, active: choosable, highlighted: isHovered)
+                } else {
+                    // Hold the gutter open, so every reply's text starts on the
+                    // same line down the panel whether it has a key or not.
+                    Color.clear.frame(width: 24, height: 1)
+                }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    if isLatest {
+                        HStack(spacing: 6) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 11))
+                                .foregroundStyle(
+                                    choosable ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary)
+                                )
+                                .frame(width: 14)
+
+                            Text("With your context")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(choosable ? .primary : .secondary)
+
+                            if turn.isComplete, let delta = lengthDelta(for: turn.text) {
+                                Text(delta)
+                                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 5.5)
+                                    .padding(.vertical, 2)
+                                    .background(Color.white, in: Capsule())
+                                    .overlay {
+                                        Capsule().strokeBorder(PanelPalette.hairline, lineWidth: 0.5)
+                                    }
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                    }
+
+                    body(
+                        text: turn.text,
+                        hasText: turn.hasText,
+                        isComplete: turn.isComplete,
+                        error: turn.error
+                    )
+                }
+
+                Spacer(minLength: 0)
+            }
+            .panelCard(isHovered: isHovered)
+        }
+        .buttonStyle(.plain)
+        .disabled(!choosable)
+        .onHover { hoveredTurn = $0 ? turn.id : nil }
+        // Superseded answers recede rather than disappear.
+        .opacity(isLatest ? 1 : 0.62)
+        .animation(.smooth(duration: 0.20), value: turn.isComplete)
+        .animation(.easeOut(duration: 0.12), value: isHovered)
     }
 
     // MARK: - One option
@@ -529,32 +696,7 @@ struct ResultPanelView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 13)
-            .padding(.vertical, 11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isHovered ? PanelPalette.cardHover : PanelPalette.card)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(
-                        isHovered ? PanelPalette.accent.opacity(0.45) : PanelPalette.hairline,
-                        lineWidth: isHovered ? 1 : 0.5
-                    )
-            }
-            // An accent rail on the hovered card. Colour alone is easy to miss
-            // on a translucent panel over arbitrary content; an edge is not.
-            .overlay(alignment: .leading) {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 12, bottomLeadingRadius: 12, style: .continuous
-                )
-                .fill(PanelPalette.accent)
-                .frame(width: isHovered ? 3 : 0)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .shadow(color: .black.opacity(isHovered ? 0.07 : 0), radius: 6, y: 2)
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .panelCard(isHovered: isHovered)
         }
         .buttonStyle(.plain)
         .disabled(!choosable)
@@ -708,14 +850,17 @@ struct ResultPanelView: View {
 
     // MARK: - Follow-up input
 
-    /// Type an extra instruction and rewrite again, without starting over.
+    /// Type context and rewrite again, without starting over.
     ///
     /// The panel does not hold focus by default, so the box is inert until the
-    /// user asks for it -- Tab, or a click. That request activates the app;
-    /// leaving the box hands focus straight back.
+    /// user asks for it -- Tab, or a click. That request activates the app; esc
+    /// hands focus straight back. Focus is kept between messages, so a
+    /// conversation reads as one, and only the first message costs a ⇥.
     private var refineBox: some View {
         HStack(spacing: 9) {
-            Image(systemName: "arrow.trianglehead.counterclockwise.rotate.90")
+            Image(systemName: model.isChatting
+                  ? "bubble.left.and.text.bubble.right"
+                  : "arrow.trianglehead.counterclockwise.rotate.90")
                 .font(.system(size: 11))
                 .foregroundStyle(model.isEditing ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
 
@@ -728,9 +873,7 @@ struct ResultPanelView: View {
                     .disabled(!model.isEditing)
 
                 if model.refineText.isEmpty {
-                    Text(model.isEditing
-                         ? "Shorter, no jargon, keep the link…"
-                         : "Press ⇥ to add an instruction and rewrite")
+                    Text(composerPrompt)
                         .font(.system(size: 12.5))
                         .foregroundStyle(.tertiary)
                         .allowsHitTesting(false)
@@ -763,39 +906,65 @@ struct ResultPanelView: View {
         }
     }
 
+    /// What the empty box invites you to do.
+    ///
+    /// Different once a conversation exists: the first message has to explain
+    /// that the box is there at all, and after that it is obviously a chat and
+    /// the examples are worth more than the instructions.
+    private var composerPrompt: String {
+        switch (model.isEditing, model.isChatting) {
+        case (true, true):   return "Mention the deadline, warmer, keep the link…"
+        case (true, false):  return "Shorter, no jargon, keep the link…"
+        case (false, true):  return "Press ⇥ to add more"
+        case (false, false): return "Press ⇥ to add context and rewrite"
+        }
+    }
+
     // MARK: - Footer
 
     @ViewBuilder
     private var footer: some View {
         HStack(spacing: 14) {
-            switch model.state {
-            case .personal, .translating:
-                hint("1", "apply")
-            case .languages:
-                hint("1–0", "write in")
-            default:
-                hint("1–4", "apply")
-            }
-
-            if model.isChoosingLanguage {
-                hint("esc", "back")
+            if model.isEditing {
+                // The panel holds the keyboard, so none of the picker's keys are
+                // live. Still offering "1 apply" here would be a lie that costs
+                // the user a stray character in the middle of a sentence.
+                hint("⏎", "send")
+                hint("esc", "done")
             } else {
-                hint("⌥T", "translate")
-                hint("⇥", "refine")
-                hint("esc", model.isEditing ? "stop editing" : "dismiss")
+                switch model.state {
+                case .personal, .translating, .chat:
+                    hint("1", "apply")
+                case .languages:
+                    hint("1–0", "write in")
+                default:
+                    hint("1–4", "apply")
+                }
+
+                if model.isChoosingLanguage {
+                    hint("esc", "back")
+                } else {
+                    hint("⌥T", "translate")
+                    hint("⇥", model.isChatting ? "add more" : "refine")
+                    hint("esc", "dismiss")
+                }
             }
 
             Spacer()
             if !model.isEditing {
-                Text(model.isChoosingLanguage
-                     ? "written straight into that language"
-                     : "or keep typing to carry on")
+                Text(footerNote)
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
+    }
+
+    private var footerNote: String {
+        if model.isChoosingLanguage { return "written straight into that language" }
+        if model.isChatting { return "click any answer above to use it" }
+        return "or keep typing to carry on"
     }
 
     private func hint(_ key: String, _ label: String) -> some View {

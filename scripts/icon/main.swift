@@ -1,14 +1,13 @@
-#!/usr/bin/env swift
 //
 // Draws Rephraze's app icon and writes Resources/AppIcon.icns.
 //
 // Generated rather than committed as binary art so it can be tweaked in one
 // place and re-rendered at every size macOS asks for. Run: make icon
 //
-// The mark is one stroke that starts jagged and resolves into a smooth curve:
-// rough writing in, clean writing out. Abstract on purpose -- it stays legible
-// at 16pt and does not compete with the literal wand in the menu bar, which is
-// a different job at a different size.
+// The mark itself lives in the app, in RephrazeKit/UI/RephrazeMark.swift, which
+// scripts/make-icon.sh compiles alongside this file. The icon, the menu bar and
+// the panel all stroke that one path -- when it was defined here instead, the
+// app kept a wand in the menu bar for a release after the icon stopped being one.
 
 import AppKit
 import Foundation
@@ -76,46 +75,17 @@ func draw(size S: CGFloat) -> NSImage {
     ctx.restoreGState()
 
     // MARK: The mark
-    //
-    // One continuous stroke that begins as hard angular zigzag and resolves
-    // into a smooth curve. That is the product in a single form: rough writing
-    // going in, clean writing coming out. No wand, no text lines, no sparkles --
-    // an abstract mark reads at 16pt and does not date, where an illustration
-    // turns to mush and looks like every other AI app.
 
-    let u = box.width           // work in fractions of the inner box
-    func x(_ f: CGFloat) -> CGFloat { box.minX + u * f }
-    func y(_ f: CGFloat) -> CGFloat { box.minY + u * f }
-
-    // A damped wave: one continuous stroke that starts as a wide oscillation
-    // and settles almost flat. That is rephrasing -- the same line throughout,
-    // the same direction, just resolved by the end.
-    //
-    // Earlier attempts used hard mitred corners for the "rough" half. They
-    // produced spikes and read as a heartbeat, which is a different product
-    // entirely. Amplitude carries the meaning here; sharpness does not.
-    let mark = CGMutablePath()
-    mark.move(to: CGPoint(x: x(0.130), y: y(0.500)))
-
-    /// One half-oscillation, flat-to-flat, bulging by `amplitude`.
-    func wave(to endX: CGFloat, amplitude: CGFloat) {
-        let startX = mark.currentPoint.x
-        let span = endX - startX
-        mark.addCurve(
-            to: CGPoint(x: endX, y: y(0.500)),
-            control1: CGPoint(x: startX + span * 0.36, y: y(0.500) - box.minY + box.minY + amplitude),
-            control2: CGPoint(x: endX - span * 0.36, y: y(0.500) + amplitude)
-        )
-    }
-
-    wave(to: x(0.315), amplitude: u * 0.290)    // wide
-    wave(to: x(0.500), amplitude: -u * 0.245)
-    wave(to: x(0.675), amplitude: u * 0.145)    // narrowing
-    wave(to: x(0.875), amplitude: -u * 0.048)   // settles level, no final kink
+    // Drawn in the app's own coordinates -- y down, as SwiftUI has it -- so the
+    // shared path needs flipping into Core Graphics' y-up canvas. Flipping the
+    // path rather than the context leaves the shadow below the stroke, where a
+    // flipped context would put it above.
+    var flip = CGAffineTransform(translationX: 0, y: S).scaledBy(x: 1, y: -1)
+    let mark = RephrazeMark().path(in: box).cgPath.copy(using: &flip)!
 
     ctx.saveGState()
     ctx.setStrokeColor(NSColor.white.cgColor)
-    ctx.setLineWidth(u * 0.098)
+    ctx.setLineWidth(box.width * RephrazeMark.strokeWidthRatio)
     ctx.setLineCap(.round)
     ctx.setLineJoin(.round)
 

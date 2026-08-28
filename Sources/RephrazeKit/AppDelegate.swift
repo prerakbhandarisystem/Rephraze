@@ -13,6 +13,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let onboarding = OnboardingWindow()
     private let settingsWindow = SettingsWindow()
     private let history = HistoryStore()
+    private let telemetry = Telemetry()
     private let openAI = OpenAIClient()
     private var activeRephrase: Task<Void, Never>?
     private let panel = ResultPanel()
@@ -23,6 +24,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingWasSelection = false
     private var pendingOriginal = ""
     private var pendingRecordID: UUID?
+    /// When the rephrase currently on screen began, or nil once its outcome has
+    /// been recorded. Doubles as the "still undecided" flag, so dismissing can
+    /// tell a cancelled rewrite from one that was already applied.
+    private var rephraseStartedAt: Date?
 
     public override init() {
         super.init()
@@ -39,8 +44,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusMenu.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
-        statusMenu.onOpenStyle = { [weak self] in self?.settingsWindow.show(tab: .style) }
+        statusMenu.onOpenStyle = { [weak self] in self?.settingsWindow.show(section: .style) }
+        statusMenu.onOpenSupport = { [weak self] in self?.settingsWindow.show(section: .support) }
         settingsWindow.history = history
+        settingsWindow.telemetry = telemetry
+        telemetry.start()
+        telemetry.record(.launched)
         onboarding.onGranted = { [weak self] in self?.startListening() }
 
         panel.model.onChoose = { [weak self] variant, text in
@@ -56,8 +65,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.apply(label: self.panel.model.activeLanguage?.title ?? "translation", text: text)
         }
+        panel.model.onChooseRefined = { [weak self] text in
+            self?.apply(label: "your version", text: text)
+        }
         panel.model.onStateChange = { [weak self] in self?.syncPanelDigits() }
         panel.model.onRequestEditing = { [weak self] in self?.beginEditing() }
+        panel.model.onRequestEndEditing = { [weak self] in self?.stopEditing() }
         panel.model.onRefine = { [weak self] instruction in self?.refine(with: instruction) }
 
         // No window at all is the right look once this works -- but on a first
@@ -85,6 +98,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationWillTerminate(_ notification: Notification) {
         permissionPoll?.invalidate()
         eventTap?.stop()
+        // Best effort: the request may not finish before the process goes, and
+        // anything left behind is still on the queue at the next launch.
+        telemetry.flush()
+        telemetry.stop()
     }
 
     /// Menu bar apps stay running with no windows open.
@@ -154,8 +171,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             // dismiss. Opening the list by mistake must not cost four rewrites
             // that already arrived.
             if panel.model.isEditing {
-                panel.endEditing(restoringFocusTo: pendingField?.pid)
-                eventTap?.wantsPanelKeys = true
+                stopEditing()
             } else if panel.model.closeLanguages() {
                 break
             } else {
@@ -250,7 +266,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let apiKey = Keychain.readAPIKey() else {
             Log.rewrite.notice("No API key stored")
             statusMenu.setLastCapture(summary: "No API key — open Settings", preview: nil)
-            settingsWindow.show(tab: .general)
+            settingsWindow.show(section: .general)
             return
         }
 
@@ -260,6 +276,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingWasSelection = capture.wasSelection
         pendingOriginal = capture.text
         pendingRecordID = nil
+        rephraseStartedAt = Date()
 
         // Only one in flight. A second trigger replaces the first rather than
         // racing it, so two rewrites can never land in the same box.
@@ -441,6 +458,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func showFailure(_ message: String) {
         Log.rewrite.error("Rephrase failed: \(message, privacy: .public)")
+        rephraseStartedAt = nil
+        telemetry.record(.failed(reason: .rephrase))
         panel.model.state = .failed(message)
         statusMenu.setLastCapture(summary: "Failed — \(message)", preview: nil)
         statusMenu.flashTap(success: false)
@@ -453,6 +472,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func apply(label: String, text: String) {
         guard let field = pendingField else { return }
+
+        // Claim the outcome before dismissing, or the `dismissPanel` below
+        // would record this accepted rewrite as a cancellation.
+        let startedAt = rephraseStartedAt
+        rephraseStartedAt = nil
 
         // Read before dismissing: the panel owns the original text.
         let original = panel.model.currentOriginal
@@ -487,6 +511,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 accepted: true
             )
             history.add(record)
+            telemetry.record(.rephrased(
+                outcome: .accepted,
+                personalised: Settings.usesWritingStyle,
+                milliseconds: Self.elapsed(since: startedAt)
+            ))
             statusMenu.setLastCapture(
                 summary: "Applied \(label) in \(field.appName)",
                 preview: Self.preview(of: text)
@@ -495,6 +524,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case let .failed(message):
             Log.capture.error("Write failed: \(message, privacy: .public)")
+            telemetry.record(.failed(reason: .write))
             statusMenu.setLastCapture(summary: "Could not write — \(message)", preview: nil)
             statusMenu.flashTap(success: false)
         }
@@ -508,50 +538,103 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func beginEditing() {
         guard panel.isVisible, !panel.model.isEditing else { return }
         // The tap must stop swallowing keys, or typing "1" would apply a
-        // rewrite instead of entering a character.
+        // rewrite instead of entering a character. It keeps esc, which is the
+        // way back out -- see `EventTap.panelIsEditing`.
         eventTap?.wantsPanelKeys = false
+        eventTap?.panelIsEditing = true
         panel.beginEditing()
     }
 
-    /// Rewrite again with an extra instruction from the user.
+    /// Give the keyboard back to the app the text came from.
+    @MainActor
+    private func stopEditing() {
+        guard panel.model.isEditing else { return }
+        panel.endEditing(restoringFocusTo: pendingField?.pid)
+        eventTap?.panelIsEditing = false
+        eventTap?.wantsPanelKeys = true
+    }
+
+    /// Rewrite again with more context from the user.
     ///
-    /// Always returns a single result: they have just said what they want, so
-    /// offering four guesses alongside it would be ignoring them.
+    /// A conversation rather than a one-shot: the whole exchange goes back up
+    /// with every message, so "and a bit warmer" adjusts the reply they are
+    /// reading instead of starting again from the captured text. See
+    /// `Conversation`.
+    ///
+    /// Always a single result. They have just said what they want, so offering
+    /// four guesses alongside it would be ignoring them.
+    ///
+    /// Focus stays in the box afterwards, unlike everywhere else in this app.
+    /// Handing it back after each message would put a ⇥ between every one, and
+    /// a conversation you have to knock on before each sentence is not one.
     @MainActor
     private func refine(with instruction: String) {
-        guard let apiKey = Keychain.readAPIKey(), pendingField != nil else { return }
+        guard let apiKey = Keychain.readAPIKey(), let field = pendingField else { return }
 
-        panel.endEditing(restoringFocusTo: pendingField?.pid)
-        eventTap?.wantsPanelKeys = true
+        // Before the new turn is opened, so a reply still arriving from the
+        // previous round cannot stream into it.
+        activeRephrase?.cancel()
+        panel.model.ask(instruction)
 
-        let combined = Prompt.combining(style: Settings.style, instruction: instruction)
-        let original = pendingOriginal
-        let appName = pendingField?.appName ?? ""
+        // The saved style still applies to a refinement, but only if it is
+        // switched on: silently reapplying a description the user has turned
+        // off would make the toggle a lie.
+        let style = Settings.usesWritingStyle ? Settings.style : ""
+        let conversation = panel.model.chat
+        let appName = field.appName
         let model = Settings.model
         let started = Date()
-
-        activeRephrase?.cancel()
-        panel.model.beginPersonal(original: original)
 
         activeRephrase = Task { [weak self] in
             guard let self else { return }
             do {
-                for try await delta in openAI.rephrasePersonal(
-                    text: original, style: combined, model: model, apiKey: apiKey
+                for try await delta in openAI.refine(
+                    conversation: conversation, style: style, model: model, apiKey: apiKey
                 ) {
                     if Task.isCancelled { return }
-                    await self.panel.model.appendPersonal(delta)
+                    await self.panel.model.appendChat(delta)
                 }
                 guard !Task.isCancelled else { return }
-                await self.finishPersonal(
-                    original: original, appName: appName, started: started
-                )
+                await self.finishRefinement(appName: appName, started: started)
             } catch is CancellationError {
                 return
             } catch {
-                await self.showFailure(error.localizedDescription)
+                await self.failRefinement(error.localizedDescription)
             }
         }
+    }
+
+    /// One round of the conversation finished streaming.
+    @MainActor
+    private func finishRefinement(appName: String, started: Date) {
+        panel.model.completeChat()
+
+        guard let text = panel.model.chat.latestRewrite else {
+            failRefinement("OpenAI returned nothing.")
+            return
+        }
+
+        let round = panel.model.chat.exchanges
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        Log.rewrite.notice("""
+            Refinement \(round) for \(appName, privacy: .public) in \(elapsed)ms
+            """)
+
+        statusMenu.setLastCapture(
+            summary: "Rewritten with your context — press 1",
+            preview: Self.preview(of: text)
+        )
+    }
+
+    /// One round failed. The transcript survives it, so the user keeps every
+    /// earlier answer and can pick one of those or simply try again -- which is
+    /// a great deal better than a whole panel replaced by an error.
+    @MainActor
+    private func failRefinement(_ message: String) {
+        Log.rewrite.error("Refinement failed: \(message, privacy: .public)")
+        panel.model.failChat(message)
+        statusMenu.setLastCapture(summary: "Failed — \(message)", preview: nil)
+        statusMenu.flashTap(success: false)
     }
 
     // MARK: - Translation
@@ -572,6 +655,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let appName = pendingField?.appName ?? ""
         let model = Settings.model
         let started = Date()
+
+        telemetry.record(.translated(language: language))
 
         activeRephrase?.cancel()
         panel.model.beginTranslating(into: language)
@@ -628,11 +713,27 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func dismissPanel() {
         guard panel.isVisible else { return }
+
+        // Still undecided at this point means the user walked away from it.
+        if let startedAt = rephraseStartedAt {
+            rephraseStartedAt = nil
+            telemetry.record(.rephrased(
+                outcome: .dismissed,
+                personalised: Settings.usesWritingStyle,
+                milliseconds: Self.elapsed(since: startedAt)
+            ))
+        }
         panel.endEditing(restoringFocusTo: pendingField?.pid)
         panel.hide()
+        eventTap?.panelIsEditing = false
         eventTap?.wantsPanelKeys = false
         eventTap?.panelDigitCount = 0
         activeRephrase?.cancel()
+    }
+
+    private static func elapsed(since start: Date?) -> Int {
+        guard let start else { return 0 }
+        return Int(Date().timeIntervalSince(start) * 1000)
     }
 
     /// Short, single-line excerpt for the menu.

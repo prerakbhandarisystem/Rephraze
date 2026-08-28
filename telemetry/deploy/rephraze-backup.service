@@ -1,0 +1,10 @@
+[Unit]
+Description=Snapshot the Rephraze usage database
+
+[Service]
+Type=oneshot
+User=rephraze
+Group=rephraze
+Environment=REPHRAZE_DB=/var/lib/rephraze/usage.db
+ExecStart=/opt/rephraze/deploy/backup.sh /var/backups/rephraze
+ReadWritePaths=/var/lib/rephraze /var/backups/rephraze

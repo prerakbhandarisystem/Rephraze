@@ -1,0 +1,15 @@
+# Runs the backup every night.
+#   sudo systemctl enable --now rephraze-backup.timer
+
+[Unit]
+Description=Nightly Rephraze usage backup
+
+[Timer]
+OnCalendar=daily
+# If the machine was off at the scheduled time, run it at the next boot rather
+# than skipping the night entirely.
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

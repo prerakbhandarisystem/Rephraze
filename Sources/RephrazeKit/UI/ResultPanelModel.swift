@@ -31,6 +31,8 @@ public final class ResultPanelModel: ObservableObject {
         case languages
         /// The message being written in the chosen language.
         case translating(TargetLanguage)
+        /// A back-and-forth about the rewrite, once the user has added context.
+        case chat
         case failed(String)
     }
 
@@ -73,6 +75,9 @@ public final class ResultPanelModel: ObservableObject {
     /// key feel dangerous, and it is pressed far too often for that.
     private var stateBeforeLanguages: State?
 
+    /// The follow-up conversation, once the user has started one.
+    @Published public var chat = Conversation(original: "")
+
     /// Text in the follow-up box at the bottom of the panel.
     @Published public var refineText: String = ""
 
@@ -105,7 +110,7 @@ public final class ResultPanelModel: ObservableObject {
     public var liveDigitCount: Int {
         switch state {
         case .languages:            return TargetLanguage.allCases.count
-        case .personal, .translating: return 1
+        case .personal, .translating, .chat: return 1
         case .streaming:            return RephraseVariant.allCases.count
         case let .ready(set):       return set.available.count
         case .loading, .failed:     return 0
@@ -120,10 +125,14 @@ public final class ResultPanelModel: ObservableObject {
     public var onChooseTranslation: ((String) -> Void)?
     /// Called when the user takes the single personalised rewrite.
     public var onChoosePersonal: ((String) -> Void)?
+    /// Called when the user takes a rewrite out of the conversation.
+    public var onChooseRefined: ((String) -> Void)?
     /// Called with a follow-up instruction, to rewrite again.
     public var onRefine: ((String) -> Void)?
     /// Called when the panel needs keyboard focus for its input box.
     public var onRequestEditing: (() -> Void)?
+    /// Called when the user is done typing and wants their own field back.
+    public var onRequestEndEditing: (() -> Void)?
 
     public init() {}
 
@@ -131,6 +140,7 @@ public final class ResultPanelModel: ObservableObject {
 
     public func beginStreaming(original: String) {
         self.original = original
+        chat = Conversation(original: original)
         slots = Dictionary(
             uniqueKeysWithValues: RephraseVariant.allCases.map { ($0, VariantSlot()) }
         )
@@ -178,6 +188,9 @@ public final class ResultPanelModel: ObservableObject {
         case .personal: return "personal"
         case .languages: return "languages"
         case let .translating(language): return "translating-\(language.rawValue)"
+        // Keyed by turn count, not by the text: the panel should ease open as
+        // each turn is added, not re-animate on every token that arrives.
+        case .chat: return "chat-\(chat.turns.count)"
         case .failed: return "failed"
         }
     }
@@ -186,6 +199,7 @@ public final class ResultPanelModel: ObservableObject {
 
     public func beginPersonal(original: String) {
         self.original = original
+        chat = Conversation(original: original)
         personalText = ""
         personalComplete = false
         state = .personal
@@ -263,12 +277,89 @@ public final class ResultPanelModel: ObservableObject {
         onChooseTranslation?(translationText)
     }
 
+    // MARK: - Follow-up conversation
+
+    /// True while the transcript is on screen.
+    public var isChatting: Bool {
+        if case .chat = state { return true }
+        return false
+    }
+
+    /// The one rewrite currently on screen, if there is exactly one.
+    ///
+    /// Four variants are not one answer, so the picker has nothing to carry
+    /// into a conversation and it starts from the original instead. A
+    /// translation is left out too: it is in another language, and seeding the
+    /// exchange with it would have the model reading its own last reply in
+    /// Japanese while being asked to rewrite English.
+    private var currentRewrite: String? {
+        switch state {
+        case .personal: return personalIsChoosable ? personalText : nil
+        default: return nil
+        }
+    }
+
+    /// Send the user's context and open a reply for it.
+    ///
+    /// The first one starts the conversation, seeded with whatever they were
+    /// looking at, so "shorter" means shorter than that rather than shorter
+    /// than what they typed. Every later one continues it.
+    public func ask(_ instruction: String) {
+        if !isChatting {
+            pinOriginal()
+            chat = Conversation(original: original, opening: currentRewrite)
+        }
+        chat.ask(instruction)
+        state = .chat
+    }
+
+    public func appendChat(_ delta: String) {
+        chat.append(delta)
+    }
+
+    /// Finish the reply, and tell the tap that `1` now means something.
+    ///
+    /// `onStateChange` by hand because the state itself did not change -- it is
+    /// still `.chat`. Without this the number key would stay dead until the
+    /// next state change, which in a conversation may never come.
+    public func completeChat() {
+        chat.complete()
+        onStateChange?()
+    }
+
+    public func failChat(_ message: String) {
+        chat.fail(message)
+        onStateChange?()
+    }
+
+    /// Apply the newest rewrite in the conversation.
+    public func chooseChat() {
+        guard let text = chat.latestRewrite else { return }
+        onChooseRefined?(text)
+    }
+
+    /// Apply one particular reply, including a superseded one.
+    ///
+    /// Clicking back up the transcript is the only way to recover an answer the
+    /// next instruction made worse, and without it the user would have to undo
+    /// their own instruction by describing its opposite.
+    public func choose(_ turn: ChatTurn) {
+        guard turn.isChoosable else { return }
+        onChooseRefined?(turn.text)
+    }
+
     // MARK: - Follow-up instruction
 
     /// Ask for focus so the user can type an instruction.
     public func beginEditing() {
         guard !isEditing else { return }
         onRequestEditing?()
+    }
+
+    /// Give focus back to the text field the user was writing in.
+    public func endEditing() {
+        guard isEditing else { return }
+        onRequestEndEditing?()
     }
 
     /// Send the typed instruction and rewrite again.
@@ -293,6 +384,8 @@ public final class ResultPanelModel: ObservableObject {
             choosePersonal()
         case .translating:
             chooseTranslation()
+        case .chat:
+            chooseChat()
         case .languages:
             break
         case .streaming:
@@ -317,6 +410,13 @@ public final class ResultPanelModel: ObservableObject {
         case .translating:
             guard digit == 1 else { return }
             chooseTranslation()
+
+        case .chat:
+            // Only the newest reply has a key. The rest are still one click
+            // away, but numbering a growing transcript would move the keys
+            // under the user's finger with every message.
+            guard digit == 1 else { return }
+            chooseChat()
 
         case .languages:
             // 1-9 then 0, matching the number row, so the tenth language sits

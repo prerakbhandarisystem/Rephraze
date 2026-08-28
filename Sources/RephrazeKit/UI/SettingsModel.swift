@@ -1,10 +1,53 @@
+import AppKit
 import SwiftUI
 import Combine
 
-public enum SettingsTab: Hashable {
+/// A section of the settings window, and everything the sidebar needs to draw
+/// it.
+///
+/// Title, icon and summary live here rather than at the call site, so adding a
+/// section is one case with its properties filled in -- not an edit in three
+/// separate places that can disagree with each other.
+public enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
     case general
     case style
     case history
+    case usage
+    case support
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .general: return "General"
+        case .style:   return "Writing style"
+        case .history: return "History"
+        case .usage:   return "Usage"
+        case .support: return "Support"
+        }
+    }
+
+    public var symbol: String {
+        switch self {
+        case .general: return "gearshape"
+        case .style:   return "signature"
+        case .history: return "clock.arrow.circlepath"
+        case .usage:   return "chart.bar"
+        case .support: return "lifepreserver"
+        }
+    }
+
+    /// One line under the title in the sidebar, so the window explains itself
+    /// rather than making you click each section to find out what it is.
+    public var summary: String {
+        switch self {
+        case .general: return "Key, model and speed"
+        case .style:   return "Teach it how you write"
+        case .history: return "What it has rewritten"
+        case .usage:   return "Anonymous reporting, off by default"
+        case .support: return "Report a problem"
+        }
+    }
 }
 
 /// Backing state for the settings window.
@@ -30,10 +73,26 @@ public final class SettingsModel: ObservableObject {
     /// than jumping ahead the moment they tick one box.
     @Published public var stickyQuestionID: String?
 
+    // MARK: - Usage reporting
+
+    @Published public var usageReportingEnabled: Bool = false
+    @Published public var queuedUsageEvents: Int = 0
+
+    // MARK: - Support
+
+    @Published public var ticketKind: TicketKind = .bug
+    @Published public var ticketSummary: String = ""
+    @Published public var ticketDetail: String = ""
+    @Published public var ticketIncludesDiagnostics: Bool = true
+    @Published public var ticketStatus: TicketStatus = .idle
+    /// Read when the section appears rather than on every view update, so the
+    /// list on screen is exactly the list that will be sent.
+    @Published public var diagnostics: Diagnostics = Diagnostics(fields: [])
+
     @Published public var records: [RephraseRecord] = []
     @Published public var searchTerm: String = ""
     @Published public var status: Status = .idle
-    @Published public var selectedTab: SettingsTab = .general
+    @Published public var selectedSection: SettingsSection = .general
 
     public enum Status: Equatable {
         case idle
@@ -41,7 +100,17 @@ public final class SettingsModel: ObservableObject {
         case error(String)
     }
 
+    public enum TicketStatus: Equatable {
+        case idle
+        /// Handed to the mail client. Whether it is actually sent is now the
+        /// sender's decision, and the wording on screen says so.
+        case handedOff
+        /// No mail client took it, so the report went to the clipboard instead.
+        case copied
+    }
+
     private let history: HistoryStore
+    private let telemetry: Telemetry
 
     /// Models worth defaulting to. Anything else can be typed in.
     public static let suggestedModels = [
@@ -51,8 +120,9 @@ public final class SettingsModel: ObservableObject {
         "gpt-4.1",
     ]
 
-    public init(history: HistoryStore) {
+    public init(history: HistoryStore, telemetry: Telemetry) {
         self.history = history
+        self.telemetry = telemetry
         refresh()
     }
 
@@ -68,6 +138,8 @@ public final class SettingsModel: ObservableObject {
         // Rebuild the trail so Back still works after reopening the window.
         askedOrder = VoiceWizard.all.map(\.id).filter { !(styleAnswers[$0] ?? []).isEmpty }
         records = history.all
+        usageReportingEnabled = telemetry.isEnabled
+        queuedUsageEvents = telemetry.queuedCount
     }
 
     public var filteredRecords: [RephraseRecord] {
@@ -119,6 +191,106 @@ public final class SettingsModel: ObservableObject {
     }
 
     public var historyFileLocation: URL { history.fileLocation }
+
+    // MARK: - Usage reporting
+
+    /// True when this build has somewhere to send reports at all. When it does
+    /// not, the toggle is meaningless and the section says so rather than
+    /// offering a switch that does nothing.
+    public var usageEndpointConfigured: Bool { AppInfo.usageEndpoint != nil }
+
+    public var usageEndpointDescription: String {
+        AppInfo.usageEndpoint?.absoluteString ?? "not set in this build"
+    }
+
+    public func setUsageReporting(_ enabled: Bool) {
+        telemetry.isEnabled = enabled
+        usageReportingEnabled = enabled
+        queuedUsageEvents = telemetry.queuedCount
+        if enabled { telemetry.start() } else { telemetry.stop() }
+    }
+
+    /// Forget this install and start again as a new one.
+    public func resetInstallID() {
+        telemetry.resetInstallID()
+        queuedUsageEvents = telemetry.queuedCount
+    }
+
+    public var installID: String { Telemetry.installID }
+
+    /// The events this build is capable of sending, spelled out. Written by
+    /// hand against `UsageEvent` so the screen is a claim someone has to keep
+    /// true, not a reflection that quietly grows a new field.
+    public static let usageEventDescriptions: [(String, String)] = [
+        ("launched", "that the app started — nothing else"),
+        ("rephrased", "accepted, dismissed or failed · whether your style was used · how long it took"),
+        ("translated", "which of the ten languages"),
+        ("failed", "network, service, cancelled or other"),
+    ]
+
+    // MARK: - Support
+
+    /// Re-read the diagnostics. Called when the section appears, so revoking
+    /// Accessibility access while the window sits open still shows up here.
+    public func refreshDiagnostics() {
+        diagnostics = Diagnostics.current(
+            historyEnabled: history.isEnabled,
+            historyCount: history.count
+        )
+    }
+
+    public var ticket: SupportTicket {
+        SupportTicket(
+            kind: ticketKind,
+            summary: ticketSummary,
+            detail: ticketDetail,
+            includesDiagnostics: ticketIncludesDiagnostics,
+            diagnostics: diagnostics
+        )
+    }
+
+    public var canSendTicket: Bool { ticket.isSendable }
+
+    /// Open the report in the user's mail client.
+    ///
+    /// Nothing leaves the machine here -- the message is composed and left for
+    /// the sender to read and send. If no client takes it, the report goes to
+    /// the clipboard rather than vanishing along with what they just wrote.
+    public func sendTicket() {
+        guard canSendTicket else { return }
+        let ticket = ticket
+
+        if let url = ticket.mailtoURL(to: AppInfo.supportEmail),
+           NSWorkspace.shared.open(url) {
+            ticketStatus = .handedOff
+        } else {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(
+                ticket.plainText(to: AppInfo.supportEmail),
+                forType: .string
+            )
+            ticketStatus = .copied
+        }
+    }
+
+    /// Put the whole report on the clipboard, for pasting somewhere that isn't
+    /// email.
+    public func copyTicket() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(
+            ticket.plainText(to: AppInfo.supportEmail),
+            forType: .string
+        )
+        ticketStatus = .copied
+    }
+
+    /// Clear the form after a report has been handed off, so the next one
+    /// starts empty rather than on top of the last.
+    public func newTicket() {
+        ticketSummary = ""
+        ticketDetail = ""
+        ticketStatus = .idle
+    }
 
     // MARK: - Wizard
 

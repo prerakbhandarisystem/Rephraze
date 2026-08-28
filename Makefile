@@ -13,7 +13,7 @@ build:
 run: build
 	@pkill -x Rephraze 2>/dev/null || true
 	@open $(APP)
-	@echo "Running. Look for the wand icon in your menu bar."
+	@echo "Running. Look for the wave icon in your menu bar."
 
 ## Copy to /Applications and launch from there
 install: build
@@ -28,9 +28,9 @@ uninstall:
 	@rm -rf $(INSTALLED)
 	@echo "Removed $(INSTALLED)"
 
-## Redraw the app icon from scripts/make-icon.swift.
+## Redraw the app icon from scripts/icon/.
 icon:
-	@swift scripts/make-icon.swift
+	@./scripts/make-icon.sh
 
 ## One-time: create the stable signing identity (see scripts/make-cert.sh)
 cert:

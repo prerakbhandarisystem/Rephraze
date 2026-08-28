@@ -70,6 +70,15 @@ public final class EventTap {
     /// never takes focus. Read synchronously inside the callback.
     public var wantsPanelKeys = false
 
+    /// True while the panel holds the keyboard for its own input box.
+    ///
+    /// The panel is key then, so it receives everything itself and the tap must
+    /// keep out of the way -- with one exception. `esc` never reaches our code:
+    /// the field editor takes it first, to abandon whatever is half-typed. So
+    /// the tap keeps exactly that one key while editing and passes the rest
+    /// through untouched, which is what makes "esc to stop typing" work at all.
+    public var panelIsEditing = false
+
     /// How many number keys the picker is using right now.
     ///
     /// Four for the rewrites, ten for the language list, one for a single
@@ -212,6 +221,24 @@ public final class EventTap {
 
         case .keyDown:
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+
+            if panelIsEditing {
+                // Tell the monitor a key was pressed, or releasing a modifier
+                // after typing would read as a solo tap.
+                _ = monitor.handle(.keyDown)
+                if keyCode == Self.escapeKeyCode {
+                    emit(.escape)
+                    return nil
+                }
+                // Swallowed and ignored. The box is the only thing worth having
+                // focus while it is open, and Tab would walk off it to whatever
+                // SwiftUI decides is next -- leaving the user typing into
+                // nothing, with no sign of where their words went.
+                if keyCode == Self.tabKeyCode {
+                    return nil
+                }
+                return Unmanaged.passUnretained(event)
+            }
 
             if wantsPanelKeys {
                 let hasModifier = event.flags.contains(.maskCommand)
