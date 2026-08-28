@@ -12,6 +12,10 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
     /// keep two queues over the same file and lose each other's events.
     public var telemetry: Telemetry?
 
+    /// Called when the trigger key or its timing changes, so the running event
+    /// tap can be rebuilt. Owned by whoever owns the tap.
+    public var onHotkeyChanged: () -> Void = {}
+
     public override init() {
         super.init()
     }
@@ -25,7 +29,9 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
     @MainActor
     public func show(section: SettingsSection? = nil) {
         let landing = section ?? {
-            if !Keychain.hasAPIKey { return SettingsSection.general }
+            // Account, not General: the key is what is missing, and the key
+            // lives there now.
+            if !Keychain.hasAPIKey { return SettingsSection.account }
             if Settings.style.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return .style
             }
@@ -43,10 +49,14 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
 
         guard let history, let telemetry else { return }
 
-        NSApp.setActivationPolicy(.regular)
+        // Up for as long as this window is open, whatever the preference: a
+        // window belonging to an app with no Dock icon cannot be reached with
+        // ⌘-Tab, so it would be lost the moment anything covered it.
+        DockPresence.raiseForWindow()
 
         let model = SettingsModel(history: history, telemetry: telemetry)
         model.selectedSection = landing
+        model.onHotkeyChanged = { [weak self] in self?.onHotkeyChanged() }
         self.model = model
 
         let root = SettingsView(model: model) { [weak self] in
@@ -56,7 +66,20 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
         let controller = NSHostingController(rootView: root)
         let win = NSWindow(contentViewController: controller)
         win.title = "Rephraze"
-        win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        win.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+
+        // No strip of its own above the window: the content runs the full
+        // height and the title bar is drawn over it, so the close and minimise
+        // buttons sit on the sidebar's cream rather than on a grey band that
+        // stops where the sidebar starts. That band was the one seam left in
+        // the window.
+        win.titlebarAppearsTransparent = true
+        // The sidebar already says "Rephraze" in type twice the size, and a
+        // centred title over a transparent bar reads as floating text.
+        win.titleVisibility = .hidden
+        // One row rather than a title above a toolbar, now that there is no
+        // title to sit above it.
+        win.toolbarStyle = .unified
 
         // Open large: the History tab is a reading view, and a cramped window
         // makes long rewrites unreadable. Roughly three quarters of the screen,
@@ -96,6 +119,8 @@ public final class SettingsWindow: NSObject, NSWindowDelegate {
     public func windowWillClose(_ notification: Notification) {
         window = nil
         model = nil
-        NSApp.setActivationPolicy(.accessory)
+        // Back to whatever the user asked for in System, rather than always to
+        // accessory -- that would quietly undo a Dock icon they turned on.
+        DockPresence.apply()
     }
 }

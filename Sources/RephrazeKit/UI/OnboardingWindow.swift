@@ -6,6 +6,9 @@ import AppKit
 /// feel like nothing happened -- the only sign of life is a small menu bar icon
 /// that is easy to miss behind a notch or a crowded menu bar. So when the app
 /// cannot actually work yet, it says so in a window you cannot miss.
+/// Every member touches AppKit, so the whole class is pinned to the main actor
+/// rather than each method being annotated one at a time.
+@MainActor
 public final class OnboardingWindow: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
@@ -28,7 +31,7 @@ public final class OnboardingWindow: NSObject, NSWindowDelegate {
 
         // Temporarily become a normal app so the window can take focus and show
         // up in the Dock. We drop back to .accessory once access is granted.
-        NSApp.setActivationPolicy(.regular)
+        DockPresence.raiseForWindow()
 
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 340),
@@ -56,7 +59,7 @@ public final class OnboardingWindow: NSObject, NSWindowDelegate {
         poll = nil
         window?.close()
         window = nil
-        NSApp.setActivationPolicy(.accessory)
+        DockPresence.apply()
     }
 
     // MARK: - Content
@@ -146,14 +149,24 @@ public final class OnboardingWindow: NSObject, NSWindowDelegate {
         poll = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
             guard Permissions.isTrusted else { return }
             timer.invalidate()
-            self?.poll = nil
-            self?.statusLabel?.stringValue = "Access granted."
-            self?.statusLabel?.textColor = .systemGreen
 
-            // Let the user see the confirmation before it disappears.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                self?.onGranted()
-                self?.close()
+            // The timer was scheduled on the main run loop, so this fires on
+            // the main thread -- but the closure itself is nonisolated, and the
+            // compiler cannot see the connection. Stated rather than left to
+            // warn, since everything below touches AppKit.
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.poll = nil
+                self.statusLabel?.stringValue = "Access granted."
+                self.statusLabel?.textColor = .systemGreen
+
+                // Let the user see the confirmation before it disappears.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    MainActor.assumeIsolated {
+                        self.onGranted()
+                        self.close()
+                    }
+                }
             }
         }
     }
@@ -162,6 +175,6 @@ public final class OnboardingWindow: NSObject, NSWindowDelegate {
         poll?.invalidate()
         poll = nil
         window = nil
-        NSApp.setActivationPolicy(.accessory)
+        DockPresence.apply()
     }
 }

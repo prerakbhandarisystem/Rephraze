@@ -1,4 +1,5 @@
-# Keeps the usage server running, and starts it again after a reboot or a crash.
+# Keeps the backend running -- usage ingest, dashboard and support email -- and
+# starts it again after a reboot or a crash.
 #   sudo cp rephraze-usage.service /etc/systemd/system/
 #   sudo systemctl enable --now rephraze-usage
 
@@ -22,8 +23,10 @@ Environment=REPHRAZE_DB=/var/lib/rephraze/usage.db
 Environment=REPHRAZE_HOST=127.0.0.1
 Environment=REPHRAZE_PORT=8787
 
-# The dashboard token lives here, not in this file -- unit files are readable
-# by anyone on the box. Create it with chmod 600. See the README.
+# The dashboard token and the Resend key live here, not in this file -- unit
+# files are readable by anyone on the box. Create it with chmod 600. Without
+# the Resend key the server still runs; it turns support reports away rather
+# than losing them. See the README.
 EnvironmentFile=/etc/rephraze/usage.env
 
 ExecStart=/usr/bin/python3 /opt/rephraze/server.py

@@ -1,91 +1,89 @@
 import SwiftUI
 
-/// The "General" section: API key, model, speed and history switches.
+/// The "General" section: the shortcut that summons a rewrite, the model behind
+/// it, and how fast it is fetched.
+///
+/// The key moved to Account and the allowance moved to Plans and Billing. What
+/// is left is the answer to one question -- how does this app behave when I use
+/// it -- and the shortcut leads because it is the only part of Rephraze most
+/// people ever touch.
 // MARK: - General
 
 struct GeneralTab: View {
     @ObservedObject var model: SettingsModel
     var onDone: () -> Void
 
-    @FocusState private var keyFieldFocused: Bool
-
-    /// What is left of the allowance, and how much of it has gone.
-    ///
-    /// Reads `UsageQuota` directly rather than going through `SettingsModel`.
-    /// It is a value type over UserDefaults, and the count only ever moves
-    /// while the panel is in use -- which is to say while this window is not
-    /// the one being looked at.
-    private var allowanceRow: some View {
-        let quota = UsageQuota()
-
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(quota.isExhausted
-                     ? "All \(UsageQuota.allowance) used"
-                     : "\(quota.remaining) of \(UsageQuota.allowance) left")
-                    .font(.system(size: 13, weight: .medium))
-
-                Spacer()
-
-                Text("\(quota.used) used")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-
-            ProgressView(
-                value: Double(min(quota.used, UsageQuota.allowance)),
-                total: Double(UsageQuota.allowance)
-            )
-            .tint(quota.isRunningLow ? .orange : .accentColor)
-        }
-        .padding(.vertical, 2)
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             Form {
                 Section {
-                    SecureField(
-                        model.hasStoredKey ? "Saved — type a new key to replace it" : "sk-…",
-                        text: $model.apiKeyInput
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .focused($keyFieldFocused)
-                    .onSubmit(save)
-
-                    if model.hasStoredKey {
-                        HStack(spacing: 6) {
-                            Image(systemName: "checkmark.seal.fill")
-                                .foregroundStyle(.green)
-                            Text("Key stored in your Keychain")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Remove", role: .destructive, action: model.removeKey)
-                                .buttonStyle(.link)
+                    Picker("Tap twice", selection: Binding(
+                        get: { model.triggerKey },
+                        set: model.setTriggerKey
+                    )) {
+                        ForEach(TriggerKey.allCases, id: \.self) { key in
+                            // Symbol and name together. The symbol is what is
+                            // printed on the keycap; the name is what someone
+                            // who has never looked at the keycap can read.
+                            Text("\(key.displayName)  \(key.label)").tag(key)
                         }
-                        .font(.callout)
+                    }
+
+                    if let caveat = model.triggerKey.caveat {
+                        Label(caveat, systemImage: "exclamationmark.triangle")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 } header: {
-                    Text("OpenAI API key")
+                    Text("Shortcut")
                 } footer: {
-                    Text("Kept in the macOS Keychain — never written to a file, a log, or the app itself.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text("""
+                        Tap \(model.triggerDescription) with nothing else held down and \
+                        Rephraze reads whatever text box you are in. Holding the key as \
+                        part of a normal shortcut never triggers it — it has to be two \
+                        taps of that key on its own.
+                        """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
                 Section {
-                    allowanceRow
+                    Picker("How quickly", selection: Binding(
+                        get: { model.doubleTapWindow },
+                        set: model.setDoubleTapWindow
+                    )) {
+                        ForEach(SettingsModel.doubleTapSpeeds, id: \.seconds) { speed in
+                            Text(speed.name).tag(speed.seconds)
+                        }
+                        // A window set by an older build, or by hand in the
+                        // defaults, still has to be selectable — otherwise the
+                        // picker shows nothing and the first click silently
+                        // changes a setting the user never touched.
+                        if !SettingsModel.doubleTapSpeeds.contains(where: { $0.seconds == model.doubleTapWindow }) {
+                            Text("Custom").tag(model.doubleTapWindow)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if let note = SettingsModel.doubleTapSpeeds
+                        .first(where: { $0.seconds == model.doubleTapWindow })?.note {
+                        Text(note)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } header: {
-                    Text("Rewrites")
+                    Text("Double-tap speed")
                 } footer: {
                     Text("""
-                        Counted when a rewrite goes into your text — dismissing \
-                        one, or reading all four and taking none, costs nothing. \
-                        Nothing stops working when the allowance runs out.
+                        How long the second tap has got to arrive. Change it if the \
+                        shortcut keeps firing when you did not mean it, or keeps missing \
+                        when you did — the right gap is a property of your hand, not of \
+                        the app.
                         """)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -106,28 +104,6 @@ struct GeneralTab: View {
                 }
 
                 Section {
-                    Picker("Write in", selection: $model.defaultLanguage) {
-                        Text("Ask every time").tag(TargetLanguage?.none)
-                        Divider()
-                        ForEach(TargetLanguage.allCases) { language in
-                            Text("\(language.title) — \(language.endonym)")
-                                .tag(TargetLanguage?.some(language))
-                        }
-                    }
-                } header: {
-                    Text("Translation")
-                } footer: {
-                    Text("""
-                        Press ⌥T on the rewrite panel. Set a language here and it goes \
-                        straight there; press ⌥T again to pick a different one. Either way \
-                        the message is composed directly in that language, never translated \
-                        out of an English rewrite.
-                        """)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-
-                Section {
                     Toggle("Write the four versions at the same time", isOn: $model.parallelVariants)
                 } header: {
                     Text("Speed")
@@ -140,7 +116,6 @@ struct GeneralTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
-
             }
             .formStyle(.grouped)
             .settingsContentBackground()
@@ -148,22 +123,37 @@ struct GeneralTab: View {
             Divider()
 
             HStack {
-                statusView
+                SettingsStatusLine(status: model.status, hasStoredKey: model.hasStoredKey)
                 Spacer()
                 Button("Done", action: save)
                     .keyboardShortcut(.defaultAction)
             }
             .padding(12)
         }
-        .onAppear { keyFieldFocused = !model.hasStoredKey }
     }
 
-    @ViewBuilder
-    private var statusView: some View {
-        switch model.status {
+    private func save() {
+        model.save()
+        if case .error = model.status { return }
+        onDone()
+    }
+}
+
+/// The saved / failed / no-key line that sits in the footer of every section
+/// with a Done button.
+///
+/// One view rather than a copy per section: three sections press the same
+/// `save()` and have to report the same three outcomes, and three copies of
+/// that would be three places for the wording to drift apart.
+struct SettingsStatusLine: View {
+    let status: SettingsModel.Status
+    let hasStoredKey: Bool
+
+    var body: some View {
+        switch status {
         case .idle:
-            if !model.hasStoredKey {
-                Label("Add a key to start rephrasing", systemImage: "exclamationmark.triangle.fill")
+            if !hasStoredKey {
+                Label("Add a key in Account to start rephrasing", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .font(.callout)
             }
@@ -177,21 +167,5 @@ struct GeneralTab: View {
                 .font(.callout)
                 .lineLimit(2)
         }
-    }
-
-    private func save() {
-        let hadNoKeyBefore = !model.hasStoredKey
-        model.save()
-
-        if case .error = model.status { return }
-
-        // First key saved: show History so the window has somewhere to be,
-        // rather than vanishing and leaving you wondering what happened.
-        if hadNoKeyBefore && model.hasStoredKey {
-            model.selectedSection = .history
-            return
-        }
-
-        onDone()
     }
 }

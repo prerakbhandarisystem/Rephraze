@@ -16,15 +16,23 @@ struct SupportTicketTests {
         kind: TicketKind = .bug,
         summary: String = "Nothing happens in Slack",
         detail: String = "Double-tapped and no panel appeared.",
+        replyTo: String = "someone@example.com",
         diagnostics included: Bool = true
     ) -> SupportTicket {
         SupportTicket(
             kind: kind,
             summary: summary,
             detail: detail,
+            replyTo: replyTo,
             includesDiagnostics: included,
             diagnostics: diagnostics
         )
+    }
+
+    /// What comes back out of the JSON that is actually posted.
+    private func posted(_ ticket: SupportTicket) throws -> [String: Any] {
+        let data = try #require(ticket.payload)
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     // MARK: - Subject and body
@@ -65,8 +73,73 @@ struct SupportTicketTests {
     func sendability() {
         #expect(ticket().isSendable)
         #expect(ticket(detail: "").isSendable)
+        #expect(ticket(replyTo: "").isSendable)
         #expect(!ticket(summary: "").isSendable)
         #expect(!ticket(summary: "   \n ").isSendable)
+    }
+
+    /// An address that cannot receive a reply is worse than none: it promises
+    /// an answer that bounces a day later, once the sender is long gone.
+    @Test("A reply address that could never work blocks the button")
+    func rejectsUnusableReplyAddress() {
+        #expect(!ticket(replyTo: "someone").isSendable)
+        #expect(!ticket(replyTo: "someone@localhost").isSendable)
+        #expect(!ticket(replyTo: "@example.com").isSendable)
+        #expect(!ticket(replyTo: "two@at@example.com").isSendable)
+        #expect(!ticket(replyTo: "someone@example.").isSendable)
+        #expect(!ticket(replyTo: "some one@example.com").isSendable)
+    }
+
+    @Test("Ordinary addresses are left alone")
+    func acceptsRealReplyAddresses() {
+        for address in [
+            "someone@example.com",
+            "first.last+tag@sub.example.co.uk",
+            "  spaced@example.com  ",
+        ] {
+            #expect(ticket(replyTo: address).isSendable, "rejected \(address)")
+        }
+    }
+
+    // MARK: - What gets posted
+
+    @Test("The posted report carries the five things and nothing else")
+    func payloadShape() throws {
+        let body = try posted(ticket())
+
+        #expect(Set(body.keys) == ["kind", "summary", "detail", "replyTo", "diagnostics"])
+        #expect(body["kind"] as? String == "bug")
+        #expect(body["summary"] as? String == "Nothing happens in Slack")
+        #expect(body["detail"] as? String == "Double-tapped and no panel appeared.")
+        #expect(body["replyTo"] as? String == "someone@example.com")
+
+        let attached = try #require(body["diagnostics"] as? [[String: String]])
+        #expect(attached == [
+            ["label": "Rephraze", "value": "1.0 (1)"],
+            ["label": "Accessibility", "value": "granted"],
+        ])
+    }
+
+    @Test("Switching the details off leaves them out of what is posted")
+    func payloadWithoutDiagnostics() throws {
+        let attached = try posted(ticket(diagnostics: false))["diagnostics"] as? [[String: String]]
+        #expect(attached?.isEmpty == true)
+    }
+
+    @Test("An address is trimmed before it travels")
+    func payloadTrimsReplyAddress() throws {
+        let body = try posted(ticket(summary: " spaced ", replyTo: "  someone@example.com "))
+        #expect(body["replyTo"] as? String == "someone@example.com")
+        #expect(body["summary"] as? String == "spaced")
+    }
+
+    @Test("A report too long to post is cut with a note, not refused")
+    func payloadTruncatesLongDetail() throws {
+        let long = String(repeating: "a", count: SupportTicket.maxBodyLength * 2)
+        let detail = try #require(try posted(ticket(detail: long))["detail"] as? String)
+
+        #expect(detail.count <= SupportTicket.maxBodyLength)
+        #expect(detail.contains("cut here"))
     }
 
     // MARK: - mailto

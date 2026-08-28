@@ -35,22 +35,75 @@ public final class ResultPanel {
 
     public init() {}
 
+    /// Follow the user across Spaces rather than pinning to one, and sit over
+    /// full-screen apps unless they have asked it not to.
+    ///
+    /// Re-applied on every `show` rather than only at creation: the panel is
+    /// built once and lives for the life of the app, so a preference changed
+    /// after the first rewrite would otherwise not take hold until a relaunch.
+    private func applyCollectionBehavior(to panel: NSPanel) {
+        var behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .transient]
+        if Settings.panelFollowsFullScreen {
+            behavior.insert(.fullScreenAuxiliary)
+        }
+        panel.collectionBehavior = behavior
+    }
+
     public func show(near field: FocusedField?) {
         let panel = existingOrNew()
+        applyCollectionBehavior(to: panel)
+
+        // A panel already on screen is being re-used for a second trigger. Its
+        // contents change underneath; it must not blink while they do.
+        let isArriving = !panel.isVisible
 
         // Lay out at the current content size before measuring.
         panel.layoutIfNeeded()
         position(panel, near: field)
+
+        // Start transparent so the fade below has somewhere to come from.
+        // Set before ordering front, or the first frame is drawn at full
+        // opacity and the fade begins from a flash.
+        if isArriving { panel.alphaValue = 0 }
+
         // orderFrontRegardless, not makeKeyAndOrderFront: we want it visible
         // without becoming key.
         panel.orderFrontRegardless()
         resizeToFitContent()
+
+        // A sixth of a second, opacity only.
+        //
+        // This panel arrives unbidden over whatever someone was typing into,
+        // and something that simply exists between two frames reads as a
+        // glitch rather than as a response. The fade is what makes it a thing
+        // that came when called.
+        //
+        // Opacity and not movement on purpose: the window resizes itself as
+        // rewrites stream in, and a position animation running against that
+        // would fight the resize and jitter.
+        if isArriving {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().alphaValue = 1
+            }
+        }
+
         Log.app.notice("Panel shown at \(Int(panel.frame.width))x\(Int(panel.frame.height))")
     }
 
+    /// Close immediately, with no fade.
+    ///
+    /// Deliberately not animated, unlike `show`. Accepting a rewrite dismisses
+    /// the panel and then pastes into the app underneath, and that paste needs
+    /// the source app unobstructed and frontmost *now* -- a panel still fading
+    /// out over the text field is a panel that can take the keystrokes. The
+    /// entrance is where the polish is worth having; the exit has a job to do.
     public func hide() {
         endEditing(restoringFocusTo: nil)
         panel?.orderOut(nil)
+        // Reset for the next arrival, which starts its fade from zero.
+        panel?.alphaValue = 1
         anchorBottomCentre = nil
     }
 
@@ -101,8 +154,7 @@ public final class ResultPanel {
         created.hasShadow = false          // SwiftUI draws its own
         created.titleVisibility = .hidden
         created.titlebarAppearsTransparent = true
-        // Follow the user across Spaces rather than pinning to one.
-        created.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        applyCollectionBehavior(to: created)
 
         // The panel resizes on every streamed chunk. Re-pin the top each time.
         resizeObserver = NotificationCenter.default.addObserver(

@@ -24,11 +24,36 @@
 	<string>6.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
-	<!-- No Dock icon, no app menu. Lives in the menu bar only. -->
+	<!-- No Dock icon, no app menu. Lives in the menu bar only. This is what
+	     the app is at launch; the System section can raise the activation
+	     policy afterwards for anyone who wants a Dock icon back. -->
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- The writing-style profile exported from the Team section. Declared so
+	     macOS gives the file a name in Finder and an open panel can filter for
+	     it, rather than falling back to a dynamic identifier. -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.prerak.rephraze.style-profile</string>
+			<key>UTTypeDescription</key>
+			<string>Rephraze Writing Style</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>rephrazestyle</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>Rephraze</string>
 </dict>

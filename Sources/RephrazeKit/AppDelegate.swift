@@ -5,10 +5,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let statusMenu = StatusMenu()
     private var eventTap: EventTap?
-    // Option, not Command: macOS binds "press either Command key twice" to
-    // Siri, so ⌘⌘ opens Siri instead of us. ⌥ has no system double-tap binding.
-    // One-line change if this ever collides with something.
-    private let trigger: TriggerKey = .option
+    // Option by default, and the default is load-bearing: macOS binds "press
+    // either Command key twice" to Siri, so ⌘⌘ opens Siri instead of us.
+    // ⌥ has no system double-tap binding. Changeable in General now, which
+    // is why this is read on every use rather than captured once.
+    private var trigger: TriggerKey { Settings.triggerKey }
     private var permissionPoll: Timer?
     private let onboarding = OnboardingWindow()
     private let settingsWindow = SettingsWindow()
@@ -45,9 +46,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenu.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
         statusMenu.onOpenStyle = { [weak self] in self?.settingsWindow.show(section: .style) }
-        statusMenu.onOpenSupport = { [weak self] in self?.settingsWindow.show(section: .support) }
+        statusMenu.onOpenSupport = { [weak self] in self?.settingsWindow.show(section: .help) }
         settingsWindow.history = history
         settingsWindow.telemetry = telemetry
+        settingsWindow.onHotkeyChanged = { [weak self] in self?.restartListening() }
+
+        // The plist says LSUIElement, so the app starts with no Dock icon.
+        // Anyone who asked for one gets it back here, before any window opens.
+        DockPresence.apply()
         telemetry.start()
         telemetry.record(.launched)
         onboarding.onGranted = { [weak self] in self?.startListening() }
@@ -130,7 +136,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let tap = EventTap(trigger: trigger) { [weak self] signal in
+        let tap = EventTap(
+            trigger: trigger,
+            doubleTapWindow: Settings.doubleTapWindow
+        ) { [weak self] signal in
             self?.handle(signal)
         }
 
@@ -142,6 +151,27 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.app.error("Event tap failed to start despite having access")
             waitForPermission()
         }
+    }
+
+    /// Throw the listener away and build a new one on the current preferences.
+    ///
+    /// The trigger key and its timing are fixed when the tap is created, so
+    /// changing either means a new tap. The panel's live state is carried
+    /// across: the settings window can be open over an open panel, and a fresh
+    /// tap that had forgotten the panel was there would stop delivering the
+    /// number keys it depends on.
+    private func restartListening() {
+        let wantsPanelKeys = eventTap?.wantsPanelKeys ?? false
+        let panelIsEditing = eventTap?.panelIsEditing ?? false
+        let panelDigitCount = eventTap?.panelDigitCount ?? 0
+
+        eventTap?.stop()
+        eventTap = nil
+        startListening()
+
+        eventTap?.wantsPanelKeys = wantsPanelKeys
+        eventTap?.panelIsEditing = panelIsEditing
+        eventTap?.panelDigitCount = panelDigitCount
     }
 
     private func handle(_ signal: EventTap.Signal) {
@@ -299,7 +329,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let apiKey = Keychain.readAPIKey() else {
             Log.rewrite.notice("No API key stored")
             statusMenu.setLastCapture(summary: "No API key — open Settings", preview: nil)
-            settingsWindow.show(section: .general)
+            settingsWindow.show(section: .account)
             return
         }
 
@@ -433,6 +463,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             summary: "Ready in your style — press 1",
             preview: Self.preview(of: panel.model.personal.text)
         )
+        Feedback.rewriteReady()
     }
 
     /// Every variant has landed or failed.
@@ -463,6 +494,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             preview: usable.first.flatMap { panel.model.slots[$0] }
                 .map { Self.preview(of: $0.text) }
         )
+        Feedback.rewriteReady()
     }
 
     @MainActor
@@ -472,6 +504,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             summary: "\(set.available.count) versions ready — press 1–4",
             preview: set.available.first.map { Self.preview(of: $0.text) }
         )
+        Feedback.rewriteReady()
     }
 
     @MainActor
@@ -482,6 +515,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.model.state = .failed(message)
         statusMenu.setLastCapture(summary: "Failed — \(message)", preview: nil)
         statusMenu.flashTap(success: false)
+        Feedback.rewriteFailed()
+        Feedback.notifyRewriteFailed(message)
     }
 
     /// The user picked one. Put it back where it came from.
@@ -534,6 +569,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             // has actually reached the user's text field. Dismissed and failed
             // rewrites cost nothing, because the user got nothing.
             quota.recordApplied()
+            // Read back after recording, so the number in the notification is
+            // what is left rather than what was left a moment ago.
+            if quota.isRunningLow { Feedback.notifyRunningLow(remaining: quota.remaining) }
             telemetry.record(.rephrased(
                 outcome: .accepted,
                 personalised: Settings.usesWritingStyle,
@@ -653,6 +691,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.model.failChat(message)
         statusMenu.setLastCapture(summary: "Failed — \(message)", preview: nil)
         statusMenu.flashTap(success: false)
+        Feedback.rewriteFailed()
+        Feedback.notifyRewriteFailed(message)
     }
 
     // MARK: - Translation

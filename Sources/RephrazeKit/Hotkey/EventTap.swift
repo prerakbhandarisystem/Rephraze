@@ -33,6 +33,38 @@ public enum TriggerKey: String, CaseIterable {
         case .function: return "fn"
         }
     }
+
+    /// The name to print next to the symbol.
+    ///
+    /// A symbol alone is fine in a menu, where there is no room for more and
+    /// the reader is already looking for a key. In a settings list it has to be
+    /// readable by someone who does not yet know which key ⌥ is.
+    public var label: String {
+        switch self {
+        case .command:  return "Command"
+        case .option:   return "Option"
+        case .control:  return "Control"
+        case .function: return "Function"
+        }
+    }
+
+    /// Why this one might disappoint, or nil when it will simply work.
+    ///
+    /// Said in the picker rather than discovered afterwards. A double-tap that
+    /// silently opens Siri instead reads as a broken app, and the person who
+    /// chose it is the only one who can decide the trade is worth it.
+    public var caveat: String? {
+        switch self {
+        case .command:
+            return "macOS opens Siri on ⌘⌘ unless you switch that off in "
+                + "System Settings › Apple Intelligence & Siri."
+        case .function:
+            return "Some Macs already use fn for the emoji picker or dictation, "
+                + "which takes the tap first."
+        case .option, .control:
+            return nil
+        }
+    }
 }
 
 /// The single keyboard listener the whole app runs on.
@@ -93,7 +125,7 @@ public final class EventTap {
     private var tapPort: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var monitor = SoloTapMonitor()
-    private var doubleTap = DoubleTapDetector()
+    private var doubleTap: DoubleTapDetector
     private let onSignal: (Signal) -> Void
 
     private static let escapeKeyCode: Int64 = 53
@@ -113,8 +145,13 @@ public final class EventTap {
         (digit == 0 ? 10 : digit) <= panelDigitCount
     }
 
-    public init(trigger: TriggerKey = .command, onSignal: @escaping (Signal) -> Void) {
+    public init(
+        trigger: TriggerKey = .command,
+        doubleTapWindow: TimeInterval = DoubleTapDetector.defaultWindow,
+        onSignal: @escaping (Signal) -> Void
+    ) {
         self.trigger = trigger
+        self.doubleTap = DoubleTapDetector(window: doubleTapWindow)
         self.onSignal = onSignal
     }
 

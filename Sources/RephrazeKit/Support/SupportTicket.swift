@@ -113,26 +113,38 @@ public struct Diagnostics: Equatable {
     }
 }
 
-/// A support request, on its way out as an email.
+/// A support request, on its way to the maintainer's inbox.
 ///
-/// ## Why email and not a form that posts somewhere
-/// The app has no server, and adding one to carry bug reports would mean
-/// shipping a credential inside a distributed binary and standing up a service
-/// whose only job is to receive a few messages a week. Handing the message to
-/// the user's own mail client keeps the app serverless, and has a property no
-/// in-app form does: nothing is sent until the sender looks at the whole
-/// message and presses send themselves.
+/// ## How it gets there
+/// Pressing Send sends it. The app posts the report to a small endpoint that
+/// turns it into an email and hands it to a mail service, and the button does
+/// not come back until that has actually happened — so what the sender is told
+/// is what took place, not what was attempted.
+///
+/// The credential that sends the mail lives on that server and not in here,
+/// because a key inside a distributed binary is a key that everyone holding
+/// the app has, and a key that can send mail as you can send mail as you to
+/// anybody.
+///
+/// The `mailto:` builder further down is the fallback for the two cases where
+/// posting is not possible: a build with no endpoint set, and an endpoint that
+/// cannot be reached. Nothing anybody wrote should be lost because a server
+/// was down.
 public struct SupportTicket: Equatable {
 
-    /// `mailto:` has no formal length limit, but mail clients do — and the
-    /// failure is silent, with nothing opening at all. Stay well under where
-    /// anyone misbehaves, and say in the message that it was cut rather than
-    /// dropping the end quietly.
+    /// Bounds both what a `mailto:` URL carries and what is posted. `mailto:`
+    /// has no formal length limit, but mail clients do — and the failure is
+    /// silent, with nothing opening at all. Stay well under where anyone
+    /// misbehaves, and say in the message that it was cut rather than dropping
+    /// the end quietly.
     static let maxBodyLength = 6000
 
     public var kind: TicketKind
     public var summary: String
     public var detail: String
+    /// Where an answer should go, or empty to report something without
+    /// wanting to hear back.
+    public var replyTo: String
     public var includesDiagnostics: Bool
     public var diagnostics: Diagnostics
 
@@ -140,20 +152,40 @@ public struct SupportTicket: Equatable {
         kind: TicketKind,
         summary: String,
         detail: String,
+        replyTo: String,
         includesDiagnostics: Bool,
         diagnostics: Diagnostics
     ) {
         self.kind = kind
         self.summary = summary
         self.detail = detail
+        self.replyTo = replyTo
         self.includesDiagnostics = includesDiagnostics
         self.diagnostics = diagnostics
     }
 
-    /// A one-line summary is the whole requirement. Asking for more before the
-    /// button works is how reports stop getting sent.
+    public var replyAddress: String {
+        replyTo.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// A one-line summary is the whole requirement — asking for more before
+    /// the button works is how reports stop getting sent — with one exception:
+    /// an address that could never receive a reply is worse than none at all,
+    /// because it promises an answer that will bounce.
     public var isSendable: Bool {
-        !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return replyAddress.isEmpty || Self.looksLikeAnAddress(replyAddress)
+    }
+
+    /// Deliberately loose: this only has to catch the empty, the half-typed
+    /// and the obviously-not-an-address. A form that argues with a valid
+    /// address is more annoying than one that lets a wrong one through.
+    static func looksLikeAnAddress(_ text: String) -> Bool {
+        guard !text.contains(" "), text.count <= 254 else { return false }
+        let halves = text.split(separator: "@", omittingEmptySubsequences: false)
+        guard halves.count == 2, !halves[0].isEmpty else { return false }
+        let domain = halves[1]
+        return domain.contains(".") && !domain.hasPrefix(".") && !domain.hasSuffix(".")
     }
 
     public var subject: String {
@@ -174,8 +206,37 @@ public struct SupportTicket: Equatable {
         return String(text.prefix(max(0, limit - note.count))) + note
     }
 
+    /// The report as the support endpoint expects it.
+    ///
+    /// Written out by hand rather than made `Encodable`, so that what leaves
+    /// this Mac is one short list in one place. A property added to this struct
+    /// later cannot start travelling by accident; someone has to come here and
+    /// add it.
+    ///
+    /// The diagnostics travel only when they were shown and left switched on —
+    /// what the Support screen displays is exactly what is sent, which is the
+    /// whole of the promise made there.
+    public var payload: Data? {
+        let attached = includesDiagnostics
+            ? diagnostics.fields.map { ["label": $0.label, "value": $0.value] }
+            : []
+
+        let report: [String: Any] = [
+            "kind": kind.rawValue,
+            "summary": summary.trimmingCharacters(in: .whitespacesAndNewlines),
+            "detail": Self.truncated(
+                detail.trimmingCharacters(in: .whitespacesAndNewlines),
+                to: Self.maxBodyLength
+            ),
+            "replyTo": replyAddress,
+            "diagnostics": attached,
+        ]
+        return try? JSONSerialization.data(withJSONObject: report)
+    }
+
     /// The `mailto:` URL that opens the user's mail client with this message
-    /// composed and waiting.
+    /// composed and waiting. The fallback, for a build with nowhere to post to
+    /// or a server that cannot be reached.
     public func mailtoURL(to address: String) -> URL? {
         var components = URLComponents()
         components.scheme = "mailto"

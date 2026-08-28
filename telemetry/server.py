@@ -7,6 +7,9 @@ and it runs; the same command works on a VPS behind nginx or in a container.
     POST /v1/events    the app posts batches here. No auth: clients are
                        anonymous by design, so there is no credential to give
                        them that would not immediately be public.
+    POST /v1/tickets   one support report, sent straight on as an email. The
+                       Resend key lives here rather than in the app, because a
+                       key inside a distributed binary is not a key.
     GET  /             the dashboard. Token required.
     GET  /healthz      liveness, for whatever is watching the process.
 
@@ -20,6 +23,10 @@ Configuration, all through the environment:
     REPHRAZE_DB                path to the SQLite file (default ./usage.db)
     REPHRAZE_PORT              default 8787
     REPHRAZE_HOST              default 127.0.0.1
+
+Support email has three more, all read by `tickets.py`: RESEND_API_KEY,
+REPHRAZE_TICKET_FROM and REPHRAZE_TICKET_TO. Without them /v1/tickets answers
+503 and the app falls back to the user's own mail client.
 """
 
 from __future__ import annotations
@@ -35,6 +42,8 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+
+import tickets
 
 # --- Configuration -----------------------------------------------------------
 
@@ -53,6 +62,17 @@ MAX_EVENTS_PER_BATCH = 100
 # and useless to anyone trying to fill the disk.
 RATE_LIMIT_REQUESTS = 60
 RATE_LIMIT_WINDOW_SECONDS = 60
+
+# A report is a few paragraphs and a short table of settings, so it gets a much
+# smaller ceiling than a batch of events.
+MAX_TICKET_BYTES = 64 * 1024
+
+# Every accepted report becomes an email in a real inbox, so this ceiling is
+# about what one person can plausibly write rather than about bandwidth: room
+# to send a report, notice a typo and send it again, and no use at all to
+# anyone hoping to flood the inbox.
+TICKET_RATE_LIMIT = 5
+TICKET_RATE_WINDOW_SECONDS = 3600
 
 UUID_RE = re.compile(r"^[0-9A-Fa-f-]{36}$")
 
@@ -594,20 +614,48 @@ def dashboard_html(m: dict) -> str:
 
 # --- HTTP --------------------------------------------------------------------
 
-_hits: dict[str, deque] = defaultdict(deque)
+_hits: dict[tuple[str, str], deque] = defaultdict(deque)
 _hits_lock = threading.Lock()
 
 
-def rate_limited(client: str) -> bool:
+def recent(bucket: str, client: str, window: int) -> deque:
+    """What this address has done lately, with anything older than the window
+    forgotten. The caller holds `_hits_lock`."""
+    seen = _hits[(bucket, client)]
     now = time.monotonic()
+    while seen and now - seen[0] > window:
+        seen.popleft()
+    return seen
+
+
+def rate_limited(
+    client: str,
+    limit: int = RATE_LIMIT_REQUESTS,
+    window: int = RATE_LIMIT_WINDOW_SECONDS,
+    bucket: str = "requests",
+) -> bool:
+    """Has this address used up its allowance? If not, this counts as one."""
     with _hits_lock:
-        seen = _hits[client]
-        while seen and now - seen[0] > RATE_LIMIT_WINDOW_SECONDS:
-            seen.popleft()
-        if len(seen) >= RATE_LIMIT_REQUESTS:
+        seen = recent(bucket, client, window)
+        if len(seen) >= limit:
             return True
-        seen.append(now)
+        seen.append(time.monotonic())
         return False
+
+
+# Support reports get a second, much stricter allowance than the one every
+# request passes through -- and it is counted separately, in emails rather
+# than requests. Someone who mistypes their address, is told so, and sends
+# again has cost the inbox nothing, and should not be turned away for it.
+
+def over_ticket_allowance(client: str) -> bool:
+    with _hits_lock:
+        return len(recent("tickets", client, TICKET_RATE_WINDOW_SECONDS)) >= TICKET_RATE_LIMIT
+
+
+def note_ticket_sent(client: str) -> None:
+    with _hits_lock:
+        _hits[("tickets", client)].append(time.monotonic())
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -628,26 +676,43 @@ class Handler(BaseHTTPRequestHandler):
     def json(self, code: int, payload: dict) -> None:
         self.reply(code, json.dumps(payload).encode(), "application/json")
 
-    # -- POST /v1/events
+    # -- POST
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/v1/events":
+        path = urlparse(self.path).path
+        if path not in ("/v1/events", "/v1/tickets"):
             return self.json(404, {"error": "not found"})
 
+        # The flood ceiling, ahead of any work: it is about how often this
+        # address may knock, whatever it is asking for.
         if rate_limited(self.client_address[0]):
             return self.json(429, {"error": "slow down"})
 
+        if path == "/v1/events":
+            return self.ingest_events()
+        self.ingest_ticket()
+
+    def read_body(self, limit: int) -> bytes | None:
+        """The request body, or None having already answered the client."""
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            return self.json(400, {"error": "bad length"})
+            self.json(400, {"error": "bad length"})
+            return None
 
-        if length <= 0 or length > MAX_BODY_BYTES:
-            return self.json(413, {"error": "body too large"})
+        if length <= 0 or length > limit:
+            self.json(413, {"error": "body too large"})
+            return None
+
+        return self.rfile.read(length)
+
+    def ingest_events(self) -> None:
+        body = self.read_body(MAX_BODY_BYTES)
+        if body is None:
+            return
 
         try:
-            batch = json.loads(self.rfile.read(length))
-            stored = store(batch)
+            stored = store(json.loads(body))
         except (ValueError, TypeError, json.JSONDecodeError):
             # A 4xx tells the client this batch will never be accepted, so it
             # drops it instead of retrying a malformed payload forever.
@@ -657,6 +722,33 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(503, {"error": "unavailable"})
 
         self.json(200, {"stored": stored})
+
+    def ingest_ticket(self) -> None:
+        """One support report, on its way to the inbox before this returns.
+
+        Sent inline rather than queued. The sender is watching a spinner and
+        the only honest thing to show them is whether it actually went, which
+        means waiting for the mail service to say so.
+        """
+        client = self.client_address[0]
+        if over_ticket_allowance(client):
+            return self.json(429, {"error": "that is a lot of reports at once"})
+
+        body = self.read_body(MAX_TICKET_BYTES)
+        if body is None:
+            return
+
+        try:
+            ticket = tickets.clean_ticket(json.loads(body))
+            message_id = tickets.send(ticket)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return self.json(400, {"error": "bad report"})
+        except tickets.TicketError as error:
+            return self.json(error.status, {"error": error.message})
+
+        note_ticket_sent(client)
+        print(f"ticket sent: {tickets.subject_for(ticket)} [{message_id}]", flush=True)
+        self.json(200, {"sent": True})
 
     # -- GET
 
@@ -693,6 +785,10 @@ def main() -> None:
     if not DASHBOARD_TOKEN:
         print("REPHRAZE_DASHBOARD_TOKEN is not set -- the dashboard will refuse "
               "every request. Ingest still works.", flush=True)
+    if not tickets.configured():
+        print("RESEND_API_KEY, REPHRAZE_TICKET_FROM or REPHRAZE_TICKET_TO is not "
+              "set -- support reports will be turned away. See telemetry/README.md.",
+              flush=True)
     print(f"Rephraze usage on http://{HOST}:{PORT}  (db: {DB_PATH})", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 

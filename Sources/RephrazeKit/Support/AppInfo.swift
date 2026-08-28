@@ -7,6 +7,18 @@ public enum AppInfo {
     /// Where the Support section sends a report. One place to change it.
     public static let supportEmail = "prerakbhandari@gmail.com"
 
+    /// Where a report is posted so that it arrives as an email the moment it
+    /// is sent, rather than waiting in someone's Drafts folder.
+    ///
+    /// Unset on purpose, like `usageEndpoint`. The mail service credential
+    /// cannot live in the app — everyone holding the binary would hold it — so
+    /// it lives behind this endpoint instead. Until this points somewhere, the
+    /// Support section falls back to composing the report in the user's own
+    /// mail client, which works but asks them to press send a second time.
+    /// Set it when the server in `telemetry/` is running, e.g.
+    /// `URL(string: "https://usage.example.com/v1/tickets")`.
+    public static let supportEndpoint: URL? = nil
+
     /// Where opt-in usage reports are sent, or `nil` for a build that collects
     /// nothing at all.
     ///

@@ -1,12 +1,13 @@
 import SwiftUI
 
-/// The "Support" section: write a report, see exactly what goes with it, hand
-/// it to your mail client.
+/// The "Support" section: write a report, see exactly what goes with it, send
+/// it.
 ///
 /// The screen is arranged around the one thing a support form in this app has
 /// to get right — that the sender can see the whole message before it moves.
 /// So the diagnostics are shown in full rather than described, and the button
-/// says what actually happens: it opens Mail, it does not send.
+/// says what actually happens: one press and the report is sent, with the
+/// screen waiting on the server rather than claiming anything early.
 // MARK: - Support
 
 struct SupportTab: View {
@@ -29,8 +30,26 @@ struct SupportTab: View {
                     TextField("One line — what is the matter?", text: $model.ticketSummary)
                         .textFieldStyle(.roundedBorder)
                         .focused($summaryFocused)
+
+                    TextField("Your email, if you would like an answer", text: $model.ticketReplyTo)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
                 } header: {
                     Text("Report")
+                } footer: {
+                    Group {
+                        if model.replyAddressLooksWrong {
+                            Label(
+                                "That address is missing something — a reply would bounce.",
+                                systemImage: "exclamationmark.circle"
+                            )
+                            .foregroundStyle(.orange)
+                        } else {
+                            Text("Only ever used to write back. Leave it empty to report anonymously.")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.caption)
                 }
 
                 Section {
@@ -71,7 +90,8 @@ struct SupportTab: View {
                 Spacer()
                 Button("Copy Instead", action: model.copyTicket)
                     .disabled(!model.canSendTicket)
-                Button("Open in Mail", action: model.sendTicket)
+                Button(model.sendsTicketsDirectly ? "Send Report" : "Open in Mail",
+                       action: model.sendTicket)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!model.canSendTicket)
             }
@@ -137,9 +157,37 @@ struct SupportTab: View {
     private var statusView: some View {
         switch model.ticketStatus {
         case .idle:
-            Text("Goes to \(AppInfo.supportEmail)")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            Text(
+                model.sendsTicketsDirectly
+                    ? "Goes straight to \(AppInfo.supportEmail)"
+                    : "Opens in your mail app, addressed to \(AppInfo.supportEmail)"
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        case .sending:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Sending…")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.callout)
+        case .sent:
+            HStack(spacing: 8) {
+                // "Sent", not "submitted": the server waited for the mail to go
+                // before it answered, so this says the thing that happened.
+                Label("Sent — it is in the inbox", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Button("New Report", action: model.newTicket)
+                    .buttonStyle(.link)
+            }
+            .font(.callout)
+        case let .failed(reason):
+            Label(
+                "\(reason) It is on your clipboard, so nothing is lost.",
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .foregroundStyle(.orange)
+            .font(.callout)
         case .handedOff:
             HStack(spacing: 8) {
                 Label("Waiting in your mail app — press send there", systemImage: "envelope.fill")
