@@ -934,6 +934,15 @@ struct ResultPanelView: View {
     }
 
     private var footerNote: String {
+        // The allowance takes the slot when it is nearly gone. It is the only
+        // thing here the user cannot find out any other way without going
+        // looking, and the notes it displaces are hints they have read already.
+        if model.rewritesRemaining <= UsageQuota.lowWaterMark {
+            if model.rewritesRemaining == 0 { return "allowance used — still working" }
+            return model.rewritesRemaining == 1
+                ? "1 rewrite left"
+                : "\(model.rewritesRemaining) rewrites left"
+        }
         if model.isChoosingLanguage { return "written straight into that language" }
         if model.isChatting { return "click any answer above to use it" }
         return "or keep typing to carry on"

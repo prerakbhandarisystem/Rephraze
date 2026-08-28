@@ -7,6 +7,7 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
     private let permissionItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let hotkeyItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let tapCountItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let quotaItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let lastCaptureItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let previewItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 
@@ -121,6 +122,9 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
         tapCountItem.isEnabled = false
         menu.addItem(tapCountItem)
 
+        quotaItem.isEnabled = false
+        menu.addItem(quotaItem)
+
         menu.addItem(.separator())
 
         lastCaptureItem.isEnabled = false
@@ -176,6 +180,7 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
         refreshPermissionItem()
         refreshHotkeyItem()
         refreshTapCount()
+        refreshQuota()
         refreshCaptureItems()
     }
 
@@ -194,6 +199,24 @@ public final class StatusMenu: NSObject, NSMenuDelegate {
         hotkeyItem.title = isHotkeyRunning()
             ? "Listening — double-tap \(key)"
             : "Not listening — needs Accessibility"
+    }
+
+    /// The allowance, read fresh each time the menu opens.
+    ///
+    /// Phrased as what is left rather than what is spent. "12 rewrites left" is
+    /// a number someone can act on; "38 of 50 used" is arithmetic homework.
+    private func refreshQuota() {
+        let quota = UsageQuota()
+        if quota.isExhausted {
+            // Nothing stops working -- saying so plainly is better than a
+            // number that looks like a wall and is not one.
+            quotaItem.title = "All \(UsageQuota.allowance) rewrites used — still working"
+        } else {
+            let left = quota.remaining
+            quotaItem.title = left == 1
+                ? "1 rewrite left of \(UsageQuota.allowance)"
+                : "\(left) rewrites left of \(UsageQuota.allowance)"
+        }
     }
 
     private func refreshTapCount() {

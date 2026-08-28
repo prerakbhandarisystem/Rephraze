@@ -9,6 +9,39 @@ struct GeneralTab: View {
 
     @FocusState private var keyFieldFocused: Bool
 
+    /// What is left of the allowance, and how much of it has gone.
+    ///
+    /// Reads `UsageQuota` directly rather than going through `SettingsModel`.
+    /// It is a value type over UserDefaults, and the count only ever moves
+    /// while the panel is in use -- which is to say while this window is not
+    /// the one being looked at.
+    private var allowanceRow: some View {
+        let quota = UsageQuota()
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(quota.isExhausted
+                     ? "All \(UsageQuota.allowance) used"
+                     : "\(quota.remaining) of \(UsageQuota.allowance) left")
+                    .font(.system(size: 13, weight: .medium))
+
+                Spacer()
+
+                Text("\(quota.used) used")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            ProgressView(
+                value: Double(min(quota.used, UsageQuota.allowance)),
+                total: Double(UsageQuota.allowance)
+            )
+            .tint(quota.isRunningLow ? .orange : .accentColor)
+        }
+        .padding(.vertical, 2)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Form {
@@ -37,6 +70,20 @@ struct GeneralTab: View {
                     Text("OpenAI API key")
                 } footer: {
                     Text("Kept in the macOS Keychain — never written to a file, a log, or the app itself.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    allowanceRow
+                } header: {
+                    Text("Rewrites")
+                } footer: {
+                    Text("""
+                        Counted when a rewrite goes into your text — dismissing \
+                        one, or reading all four and taking none, costs nothing. \
+                        Nothing stops working when the allowance runs out.
+                        """)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

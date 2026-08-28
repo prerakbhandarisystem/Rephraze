@@ -61,6 +61,13 @@ public final class ResultPanelModel: ObservableObject {
     /// The follow-up conversation, once the user has started one.
     @Published public var chat = Conversation(original: "")
 
+    /// How many rewrites are left in the allowance, read when the panel opens.
+    ///
+    /// Only ever shown once it is running low -- see `UsageQuota.lowWaterMark`.
+    /// A count on screen from the first rewrite would make every rewrite feel
+    /// metered.
+    @Published public var rewritesRemaining = UsageQuota.allowance
+
     /// Text in the follow-up box at the bottom of the panel.
     @Published public var refineText: String = ""
 

@@ -13,6 +13,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let onboarding = OnboardingWindow()
     private let settingsWindow = SettingsWindow()
     private let history = HistoryStore()
+    private let quota = UsageQuota()
     private let telemetry = Telemetry()
     private let openAI = OpenAIClient()
     private var activeRephrase: Task<Void, Never>?
@@ -315,6 +316,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.model.state = .loading
         panel.model.appName = capture.field.appName
+        panel.model.rewritesRemaining = quota.remaining
         panel.show(near: capture.field)
         eventTap?.wantsPanelKeys = true
 
@@ -528,6 +530,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 accepted: true
             )
             history.add(record)
+            // Counted here and nowhere else: this is the one line the rewrite
+            // has actually reached the user's text field. Dismissed and failed
+            // rewrites cost nothing, because the user got nothing.
+            quota.recordApplied()
             telemetry.record(.rephrased(
                 outcome: .accepted,
                 personalised: Settings.usesWritingStyle,
