@@ -27,6 +27,23 @@ enum SettingsPalette {
 
     /// The line between the two columns, and under the footers.
     static let hairline = Color(red: 0.878, green: 0.859, blue: 0.827)
+
+    /// The second line of a sidebar row.
+    ///
+    /// A fixed tone rather than `.secondary`, for the same reason everything
+    /// else here is fixed. `.secondary` is a translucency, and translucent grey
+    /// laid over cream comes out weaker than the same grey over white -- which
+    /// is exactly where these summaries are, and exactly why they read as faint.
+    /// This is 5.8:1 against the sidebar, so it is body text you can actually
+    /// read rather than a hint you have to lean in for.
+    static let sidebarSecondary = Color(red: 0.373, green: 0.353, blue: 0.318)
+
+    /// The "Settings" and "Account" headings above each group.
+    ///
+    /// Lighter than the summaries and set in small capitals at the call site.
+    /// A heading has to be findable without competing with the rows under it,
+    /// and weight plus letterspacing does that job better than darkness does.
+    static let sidebarHeading = Color(red: 0.451, green: 0.427, blue: 0.384)
 }
 
 extension View {

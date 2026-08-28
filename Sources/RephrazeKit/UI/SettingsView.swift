@@ -27,7 +27,7 @@ public struct SettingsView: View {
     public var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .navigationSplitViewColumnWidth(min: 236, ideal: 262, max: 320)
+                .navigationSplitViewColumnWidth(min: 250, ideal: 278, max: 340)
         } detail: {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -80,12 +80,22 @@ public struct SettingsView: View {
             // under "Settings" and "Account" is a list where half of it can be
             // ignored the moment you know which half you are in.
             ForEach(SettingsSection.groups, id: \.title) { group in
-                Section(group.title) {
+                Section {
                     ForEach(group.sections) { section in
                         NavigationLink(value: section) {
                             row(section)
                         }
                     }
+                } header: {
+                    // Stated rather than left to the default, which is small,
+                    // translucent, and the first thing to disappear against
+                    // cream. Capitals and letterspacing do the work a heading
+                    // needs done -- findable at a glance, without shouting over
+                    // the rows beneath it.
+                    Text(group.title.uppercased())
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .tracking(0.7)
+                        .foregroundStyle(SettingsPalette.sidebarHeading)
                 }
             }
         }
@@ -148,25 +158,30 @@ public struct SettingsView: View {
             // shorter than its own label reads as a bullet point; one that
             // matches reads as the row's subject.
             Image(systemName: section.symbol)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
+                .frame(width: 34, height: 34)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(section.tint)
                 )
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 2.5) {
                 Text(section.title)
-                    .font(.system(size: 15.5))
+                    .font(.system(size: 17, weight: .medium))
                 Text(section.summary)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(SettingsPalette.sidebarSecondary)
+                    // Two lines rather than one truncated one. These summaries
+                    // are the only thing telling you what a section is before
+                    // you open it, and half a sentence ending in an ellipsis
+                    // tells you less than nothing.
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 7)
     }
 
     // MARK: - Settings and help
@@ -202,10 +217,10 @@ public struct SettingsView: View {
                 // tint is whatever section is open, which would make both of
                 // these change colour every time you clicked something else.
                 Image(systemName: section.symbol)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(isActive ? Color.white : section.tint)
                 Text(section.title)
-                    .font(.system(size: 13))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(isActive ? Color.white : Color.primary)
                 Spacer(minLength: 0)
             }
