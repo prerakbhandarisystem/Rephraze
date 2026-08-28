@@ -1,20 +1,5 @@
 import SwiftUI
 
-/// One row of the picker: a variant and however much of it has arrived.
-public struct VariantSlot: Sendable, Equatable {
-    public var text: String = ""
-    public var isComplete = false
-    public var error: String?
-
-    public var hasText: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// Only a finished variant may be applied. Pasting a half-streamed rewrite
-    /// would put a truncated sentence into the user's text field.
-    public var isChoosable: Bool { isComplete && hasText }
-}
-
 /// State of the floating picker.
 @MainActor
 public final class ResultPanelModel: ObservableObject {
@@ -56,17 +41,15 @@ public final class ResultPanelModel: ObservableObject {
     /// number beside a row never changes as results land. A row that shifts
     /// under the user's finger between reading "2" and pressing it would apply
     /// the wrong rewrite.
-    @Published public var slots: [RephraseVariant: VariantSlot] = [:]
+    @Published public var slots: [RephraseVariant: Streamed] = [:]
 
     public private(set) var original: String = ""
 
     /// The single personalised rewrite, as it streams in.
-    @Published public var personalText: String = ""
-    @Published public var personalComplete = false
+    @Published public var personal = Streamed()
 
     /// The translation, as it streams in.
-    @Published public var translationText: String = ""
-    @Published public var translationComplete = false
+    @Published public var translation = Streamed()
 
     /// The state the language list was opened from.
     ///
@@ -87,19 +70,10 @@ public final class ResultPanelModel: ObservableObject {
     /// where the caret has left the user's own text field.
     @Published public var isEditing = false
 
-    public var personalIsChoosable: Bool {
-        personalComplete && !personalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     /// The language currently being written in, if any.
     public var activeLanguage: TargetLanguage? {
         if case let .translating(language) = state { return language }
         return nil
-    }
-
-    public var translationIsChoosable: Bool {
-        translationComplete
-            && !translationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// How many number keys mean something right now.
@@ -118,15 +92,17 @@ public final class ResultPanelModel: ObservableObject {
     }
 
     /// Called when the user picks one.
-    public var onChoose: ((RephraseVariant, String) -> Void)?
-    /// Called when the user picks a language to write in.
+    /// Called when the user takes an answer, whichever kind it was.
+    ///
+    /// One callback rather than one per path. Every answer ends the same way --
+    /// this text, into the field it came from -- and the only thing that
+    /// differed between the four was a label for the log and the status menu.
+    /// The model knows which path it is on, so it supplies that itself instead
+    /// of the delegate reaching back in to work it out.
+    public var onApply: ((_ label: String, _ text: String) -> Void)?
+    /// Called when the user picks a language to write in. Not an apply: it
+    /// starts a fresh request rather than ending the panel.
     public var onChooseLanguage: ((TargetLanguage) -> Void)?
-    /// Called when the user takes the translation.
-    public var onChooseTranslation: ((String) -> Void)?
-    /// Called when the user takes the single personalised rewrite.
-    public var onChoosePersonal: ((String) -> Void)?
-    /// Called when the user takes a rewrite out of the conversation.
-    public var onChooseRefined: ((String) -> Void)?
     /// Called with a follow-up instruction, to rewrite again.
     public var onRefine: ((String) -> Void)?
     /// Called when the panel needs keyboard focus for its input box.
@@ -142,27 +118,21 @@ public final class ResultPanelModel: ObservableObject {
         self.original = original
         chat = Conversation(original: original)
         slots = Dictionary(
-            uniqueKeysWithValues: RephraseVariant.allCases.map { ($0, VariantSlot()) }
+            uniqueKeysWithValues: RephraseVariant.allCases.map { ($0, Streamed()) }
         )
         state = .streaming
     }
 
     public func append(_ delta: String, to variant: RephraseVariant) {
-        slots[variant, default: VariantSlot()].text += delta
+        slots[variant, default: Streamed()].append(delta)
     }
 
     public func complete(_ variant: RephraseVariant) {
-        var slot = slots[variant] ?? VariantSlot()
-        slot.text = RewriteSanitizer.clean(slot.text)
-        slot.isComplete = true
-        slots[variant] = slot
+        slots[variant, default: Streamed()].complete()
     }
 
     public func fail(_ variant: RephraseVariant, message: String) {
-        var slot = slots[variant] ?? VariantSlot()
-        slot.error = message
-        slot.isComplete = true
-        slots[variant] = slot
+        slots[variant, default: Streamed()].fail(message)
     }
 
     /// True once every variant has either finished or failed.
@@ -200,18 +170,16 @@ public final class ResultPanelModel: ObservableObject {
     public func beginPersonal(original: String) {
         self.original = original
         chat = Conversation(original: original)
-        personalText = ""
-        personalComplete = false
+        personal = Streamed()
         state = .personal
     }
 
     public func appendPersonal(_ delta: String) {
-        personalText += delta
+        personal.append(delta)
     }
 
     public func completePersonal() {
-        personalText = RewriteSanitizer.clean(personalText)
-        personalComplete = true
+        personal.complete()
     }
 
     // MARK: - Translation
@@ -247,8 +215,7 @@ public final class ResultPanelModel: ObservableObject {
     public func beginTranslating(into language: TargetLanguage) {
         pinOriginal()
         stateBeforeLanguages = nil
-        translationText = ""
-        translationComplete = false
+        translation = Streamed()
         state = .translating(language)
     }
 
@@ -263,18 +230,17 @@ public final class ResultPanelModel: ObservableObject {
     }
 
     public func appendTranslation(_ delta: String) {
-        translationText += delta
+        translation.append(delta)
     }
 
     public func completeTranslation() {
-        translationText = RewriteSanitizer.clean(translationText)
-        translationComplete = true
+        translation.complete()
     }
 
     /// Apply the translation.
     public func chooseTranslation() {
-        guard translationIsChoosable else { return }
-        onChooseTranslation?(translationText)
+        guard translation.isChoosable else { return }
+        onApply?(activeLanguage?.title ?? "translation", translation.text)
     }
 
     // MARK: - Follow-up conversation
@@ -294,7 +260,7 @@ public final class ResultPanelModel: ObservableObject {
     /// Japanese while being asked to rewrite English.
     private var currentRewrite: String? {
         switch state {
-        case .personal: return personalIsChoosable ? personalText : nil
+        case .personal: return personal.isChoosable ? personal.text : nil
         default: return nil
         }
     }
@@ -335,7 +301,7 @@ public final class ResultPanelModel: ObservableObject {
     /// Apply the newest rewrite in the conversation.
     public func chooseChat() {
         guard let text = chat.latestRewrite else { return }
-        onChooseRefined?(text)
+        onApply?("your version", text)
     }
 
     /// Apply one particular reply, including a superseded one.
@@ -345,7 +311,7 @@ public final class ResultPanelModel: ObservableObject {
     /// their own instruction by describing its opposite.
     public func choose(_ turn: ChatTurn) {
         guard turn.isChoosable else { return }
-        onChooseRefined?(turn.text)
+        onApply?("your version", turn.text)
     }
 
     // MARK: - Follow-up instruction
@@ -374,8 +340,8 @@ public final class ResultPanelModel: ObservableObject {
 
     /// Apply the single personalised rewrite.
     public func choosePersonal() {
-        guard personalIsChoosable else { return }
-        onChoosePersonal?(personalText)
+        guard personal.isChoosable else { return }
+        onApply?("your style", personal.text)
     }
 
     public func choose(_ variant: RephraseVariant) {
@@ -390,10 +356,10 @@ public final class ResultPanelModel: ObservableObject {
             break
         case .streaming:
             guard let slot = slots[variant], slot.isChoosable else { return }
-            onChoose?(variant, slot.text)
+            onApply?(variant.title, slot.text)
         case let .ready(set):
             guard let text = set.variants[variant] else { return }
-            onChoose?(variant, text)
+            onApply?(variant.title, text)
         default:
             break
         }
@@ -431,7 +397,7 @@ public final class ResultPanelModel: ObservableObject {
             let options = set.available
             guard digit >= 1, digit <= options.count else { return }
             let option = options[digit - 1]
-            onChoose?(option.variant, option.text)
+            onApply?(option.variant.title, option.text)
         default:
             break
         }

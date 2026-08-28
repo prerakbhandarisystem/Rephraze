@@ -342,13 +342,10 @@ struct ResultPanelView: View {
                     // Every variant always gets a row, in a fixed order, so the
                     // number beside it cannot move as results land.
                     ForEach(Array(RephraseVariant.allCases.enumerated()), id: \.element) { index, variant in
-                        let slot = model.slots[variant] ?? VariantSlot()
                         row(
                             index: index + 1,
                             variant: variant,
-                            text: slot.text,
-                            isComplete: slot.isComplete,
-                            error: slot.error
+                            content: model.slots[variant] ?? Streamed()
                         )
                     }
                 }
@@ -361,12 +358,11 @@ struct ResultPanelView: View {
             ScrollView {
                 VStack(spacing: 7) {
                     ForEach(Array(set.available.enumerated()), id: \.element.variant) { index, option in
+                        // Arrived all at once, so it is complete by definition.
                         row(
                             index: index + 1,
                             variant: option.variant,
-                            text: option.text,
-                            isComplete: true,
-                            error: nil
+                            content: Streamed(text: option.text, isComplete: true)
                         )
                     }
                 }
@@ -377,50 +373,93 @@ struct ResultPanelView: View {
         }
     }
 
-    // MARK: - Personal voice
+    // MARK: - One answer
 
-    /// One rewrite, in the user's own voice. No numbering to compare against,
-    /// so the row is a single confirm-or-dismiss card.
-    private var personalCard: some View {
-        let ready = model.personalIsChoosable
-        let hasText = !model.personalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let isHovered = hovered == .polished && ready   // any sentinel; one card only
+    /// Every answer the panel offers, drawn the same way.
+    ///
+    /// A key to press, a line saying what this one is, and the text as far as
+    /// it has arrived. The four kinds of answer -- a tone, your own style, a
+    /// translation, a reply in the conversation -- differ in what fills those
+    /// slots and in nothing else.
+    ///
+    /// They used to be four hand-written copies, and they had drifted exactly
+    /// as the card surface had before it was unified: the length badge was 10pt
+    /// and borderless on one, 9.5pt with a border on two others, and the title
+    /// took its colour from two different places. The same failure, one level
+    /// up from the one `PanelCardSurface` fixed.
+    private func answerCard(
+        key: Int?,
+        icon: String,
+        title: String,
+        subtitle: String? = nil,
+        showsLength: Bool = true,
+        content: Streamed,
+        isRTL: Bool = false,
+        isHovered: Bool,
+        onHover: @escaping (Bool) -> Void,
+        action: @escaping () -> Void
+    ) -> some View {
+        let choosable = content.isChoosable
 
-        return Button {
-            model.choosePersonal()
-        } label: {
+        return Button(action: action) {
             HStack(alignment: .top, spacing: 12) {
-                keycap(1, active: ready, highlighted: isHovered)
+                if let key {
+                    keycap(key, active: choosable, highlighted: isHovered)
+                } else {
+                    // Hold the gutter open, so every answer's text starts on the
+                    // same line down the panel whether it has a key or not.
+                    Color.clear.frame(width: 24, height: 1)
+                }
 
                 VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "person.crop.circle.badge.checkmark")
-                            .font(.system(size: 11))
-                            .foregroundStyle(ready ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-                            .frame(width: 14)
+                    // An empty title means the row is history -- a superseded
+                    // reply, which needs its text and nothing else.
+                    if !title.isEmpty {
+                        HStack(spacing: 6) {
+                            Image(systemName: icon)
+                                .font(.system(size: 11))
+                                .foregroundStyle(
+                                    choosable ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary)
+                                )
+                                .frame(width: 14)
 
-                        Text("In your style")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(ready ? .primary : .secondary)
+                            Text(title)
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .kerning(-0.1)
+                                .foregroundStyle(choosable ? PanelPalette.text : PanelPalette.tertiary)
 
-                        if model.personalComplete,
-                           let delta = lengthDelta(for: model.personalText) {
-                            Text(delta)
-                                .font(.system(size: 10, weight: .medium, design: .rounded))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1.5)
-                                .background(Color.white, in: Capsule())
+                            if let subtitle {
+                                Text(subtitle)
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(PanelPalette.tertiary)
+                            }
+
+                            // How much shorter or longer this answer is. The
+                            // reason to pick "Concise" is usually the number,
+                            // so show the number.
+                            if showsLength, content.isComplete,
+                               let delta = lengthDelta(for: content.text) {
+                                Text(delta)
+                                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 5.5)
+                                    .padding(.vertical, 2)
+                                    .background(Color.white, in: Capsule())
+                                    .overlay {
+                                        Capsule().strokeBorder(PanelPalette.hairline, lineWidth: 0.5)
+                                    }
+                            }
+
+                            Spacer(minLength: 0)
                         }
-
-                        Spacer(minLength: 0)
                     }
 
                     body(
-                        text: model.personalText,
-                        hasText: hasText,
-                        isComplete: model.personalComplete,
-                        error: nil
+                        text: content.text,
+                        hasText: content.hasText,
+                        isComplete: content.isComplete,
+                        error: content.error,
+                        isRTL: isRTL
                     )
                 }
 
@@ -429,9 +468,28 @@ struct ResultPanelView: View {
             .panelCard(isHovered: isHovered)
         }
         .buttonStyle(.plain)
-        .disabled(!ready)
-        .onHover { hovered = $0 ? .polished : nil }
-        .animation(.easeOut(duration: 0.14), value: model.personalComplete)
+        .disabled(!choosable)
+        .onHover(perform: onHover)
+        // Landing text should settle in, not snap.
+        .animation(.smooth(duration: 0.20), value: content.isComplete)
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+    }
+
+    // MARK: - Personal voice
+
+    /// One rewrite, in the user's own voice. No numbering to compare against,
+    /// so the row is a single confirm-or-dismiss card.
+    private var personalCard: some View {
+        answerCard(
+            key: 1,
+            icon: "person.crop.circle.badge.checkmark",
+            title: "In your style",
+            content: model.personal,
+            // Any sentinel will do; there is only ever one card here.
+            isHovered: hovered == .polished && model.personal.isChoosable,
+            onHover: { hovered = $0 ? .polished : nil },
+            action: { model.choosePersonal() }
+        )
     }
 
     // MARK: - Languages
@@ -498,52 +556,23 @@ struct ResultPanelView: View {
     /// half again as long in German -- a number that means nothing but looks
     /// like it means something.
     private func translationCard(language: TargetLanguage) -> some View {
-        let ready = model.translationIsChoosable
-        let hasText = !model.translationText
-            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let isHovered = hoveredLanguage == language && ready
-
-        return Button {
-            model.chooseTranslation()
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                keycap(1, active: ready, highlighted: isHovered)
-
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "character.bubble")
-                            .font(.system(size: 11))
-                            .foregroundStyle(ready ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-                            .frame(width: 14)
-
-                        Text("In \(language.title)")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(ready ? .primary : .secondary)
-
-                        Text(language.endonym)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-
-                        Spacer(minLength: 0)
-                    }
-
-                    body(
-                        text: model.translationText,
-                        hasText: hasText,
-                        isComplete: model.translationComplete,
-                        error: nil,
-                        isRTL: language.isRightToLeft
-                    )
-                }
-
-                Spacer(minLength: 0)
-            }
-            .panelCard(isHovered: isHovered)
-        }
-        .buttonStyle(.plain)
-        .disabled(!ready)
-        .onHover { hoveredLanguage = $0 ? language : nil }
-        .animation(.easeOut(duration: 0.14), value: model.translationComplete)
+        answerCard(
+            key: 1,
+            icon: "character.bubble",
+            title: "In \(language.title)",
+            subtitle: language.endonym,
+            // No length badge here, unlike the rewrite rows. A percentage
+            // against the original would be comparing character counts across
+            // two writing systems, where the same sentence is legitimately half
+            // the length in Japanese and half again as long in German -- a
+            // number that means nothing but looks like it means something.
+            showsLength: false,
+            content: model.translation,
+            isRTL: language.isRightToLeft,
+            isHovered: hoveredLanguage == language && model.translation.isChoosable,
+            onHover: { hoveredLanguage = $0 ? language : nil },
+            action: { model.chooseTranslation() }
+        )
     }
 
     // MARK: - The conversation
@@ -622,108 +651,31 @@ struct ResultPanelView: View {
     /// move every key each time a message is sent, and this panel's one firm
     /// rule is that the number beside a rewrite cannot move under your finger.
     private func repliedRow(_ turn: ChatTurn, isLatest: Bool) -> some View {
-        let choosable = turn.isChoosable
-        let isHovered = hoveredTurn == turn.id && choosable
-
-        return Button {
-            model.choose(turn)
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                if isLatest {
-                    keycap(1, active: choosable, highlighted: isHovered)
-                } else {
-                    // Hold the gutter open, so every reply's text starts on the
-                    // same line down the panel whether it has a key or not.
-                    Color.clear.frame(width: 24, height: 1)
-                }
-
-                VStack(alignment: .leading, spacing: 5) {
-                    if isLatest {
-                        HStack(spacing: 6) {
-                            Image(systemName: "sparkles")
-                                .font(.system(size: 11))
-                                .foregroundStyle(
-                                    choosable ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary)
-                                )
-                                .frame(width: 14)
-
-                            Text("With your context")
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(choosable ? .primary : .secondary)
-
-                            if turn.isComplete, let delta = lengthDelta(for: turn.text) {
-                                Text(delta)
-                                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 5.5)
-                                    .padding(.vertical, 2)
-                                    .background(Color.white, in: Capsule())
-                                    .overlay {
-                                        Capsule().strokeBorder(PanelPalette.hairline, lineWidth: 0.5)
-                                    }
-                            }
-
-                            Spacer(minLength: 0)
-                        }
-                    }
-
-                    body(
-                        text: turn.text,
-                        hasText: turn.hasText,
-                        isComplete: turn.isComplete,
-                        error: turn.error
-                    )
-                }
-
-                Spacer(minLength: 0)
-            }
-            .panelCard(isHovered: isHovered)
-        }
-        .buttonStyle(.plain)
-        .disabled(!choosable)
-        .onHover { hoveredTurn = $0 ? turn.id : nil }
+        answerCard(
+            key: isLatest ? 1 : nil,
+            icon: "sparkles",
+            title: isLatest ? "With your context" : "",
+            content: turn.content,
+            isHovered: hoveredTurn == turn.id && turn.isChoosable,
+            onHover: { hoveredTurn = $0 ? turn.id : nil },
+            action: { model.choose(turn) }
+        )
         // Superseded answers recede rather than disappear.
         .opacity(isLatest ? 1 : 0.62)
-        .animation(.smooth(duration: 0.20), value: turn.isComplete)
-        .animation(.easeOut(duration: 0.12), value: isHovered)
     }
 
-    // MARK: - One option
-
-    /// A row in any of its states: waiting, mid-stream, done, or failed.
-    @ViewBuilder
-    private func row(
-        index: Int,
-        variant: RephraseVariant,
-        text: String,
-        isComplete: Bool,
-        error: String?
-    ) -> some View {
-        let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let choosable = isComplete && hasText && error == nil
-        let isHovered = hovered == variant && choosable
-
-        Button {
-            model.choose(variant)
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                keycap(index, active: choosable, highlighted: isHovered)
-
-                VStack(alignment: .leading, spacing: 5) {
-                    label(variant, choosable: choosable, text: text, isComplete: isComplete)
-                    body(text: text, hasText: hasText, isComplete: isComplete, error: error)
-                }
-
-                Spacer(minLength: 0)
-            }
-            .panelCard(isHovered: isHovered)
-        }
-        .buttonStyle(.plain)
-        .disabled(!choosable)
-        .onHover { hovered = $0 ? variant : nil }
-        // Landing text should settle in, not snap.
-        .animation(.smooth(duration: 0.20), value: isComplete)
-        .animation(.easeOut(duration: 0.12), value: isHovered)
+    /// One of the four tones.
+    private func row(index: Int, variant: RephraseVariant, content: Streamed) -> some View {
+        answerCard(
+            key: index,
+            icon: variant.symbol,
+            title: variant.title,
+            subtitle: variant.subtitle,
+            content: content,
+            isHovered: hovered == variant && content.isChoosable,
+            onHover: { hovered = $0 ? variant : nil },
+            action: { model.choose(variant) }
+        )
     }
 
     /// The number you press, drawn as a key.

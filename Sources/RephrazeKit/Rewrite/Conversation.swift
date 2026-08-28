@@ -18,6 +18,10 @@ public struct ChatMessage: Sendable, Equatable {
 }
 
 /// One turn in the conversation about a piece of text.
+///
+/// The user's own turns are complete the moment they are made; only a reply
+/// actually streams. Both are `Streamed` regardless, so the transcript is one
+/// list of one kind of thing rather than two that have to be zipped together.
 public struct ChatTurn: Identifiable, Sendable, Equatable {
 
     public enum Speaker: Sendable {
@@ -29,19 +33,15 @@ public struct ChatTurn: Identifiable, Sendable, Equatable {
 
     public let id = UUID()
     public let speaker: Speaker
-    public var text: String
-    public var isComplete: Bool
-    public var error: String?
+    public var content: Streamed
 
-    public var hasText: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
+    public var text: String { content.text }
+    public var isComplete: Bool { content.isComplete }
+    public var error: String? { content.error }
+    public var hasText: Bool { content.hasText }
 
-    /// Only a finished rewrite may be pasted into the user's text field.
-    /// Applying a half-streamed one would leave a truncated sentence behind.
-    public var isChoosable: Bool {
-        speaker == .rephraze && isComplete && error == nil && hasText
-    }
+    /// What the user typed is never something to paste back at them.
+    public var isChoosable: Bool { speaker == .rephraze && content.isChoosable }
 }
 
 /// The running exchange about one captured piece of text.
@@ -73,7 +73,9 @@ public struct Conversation: Sendable, Equatable {
     public init(original: String, opening: String? = nil) {
         self.original = original
         if let opening, !opening.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            turns.append(ChatTurn(speaker: .rephraze, text: opening, isComplete: true))
+            turns.append(
+                ChatTurn(speaker: .rephraze, content: Streamed(text: opening, isComplete: true))
+            )
         }
     }
 
@@ -84,38 +86,30 @@ public struct Conversation: Sendable, Equatable {
 
     /// Add the user's instruction, and open an empty reply for it to stream into.
     public mutating func ask(_ instruction: String) {
-        turns.append(ChatTurn(speaker: .you, text: instruction, isComplete: true))
-        turns.append(ChatTurn(speaker: .rephraze, text: "", isComplete: false))
+        turns.append(
+            ChatTurn(speaker: .you, content: Streamed(text: instruction, isComplete: true))
+        )
+        turns.append(ChatTurn(speaker: .rephraze, content: Streamed()))
     }
 
     /// More of the reply currently being written.
     public mutating func append(_ delta: String) {
-        guard let last = turns.indices.last, !turns[last].isComplete else { return }
-        turns[last].text += delta
+        guard let last = turns.indices.last else { return }
+        turns[last].content.append(delta)
     }
 
     /// Close the reply currently being written.
-    ///
-    /// A reply with nothing in it is left open rather than completed. Closing it
-    /// would put a blank card in the transcript that the user can neither use
-    /// nor tell apart from one still on its way; leaving it open means the
-    /// caller's "did anything arrive?" check fails and `fail` still has a turn
-    /// to write the reason into.
     public mutating func complete() {
-        guard let last = turns.indices.last, !turns[last].isComplete else { return }
-        let cleaned = RewriteSanitizer.clean(turns[last].text)
-        guard !cleaned.isEmpty else { return }
-        turns[last].text = cleaned
-        turns[last].isComplete = true
+        guard let last = turns.indices.last else { return }
+        turns[last].content.complete()
     }
 
     /// This reply failed. The rest of the conversation survives it, so one bad
     /// round does not cost the user a transcript they may still want to apply
     /// an earlier answer from.
     public mutating func fail(_ message: String) {
-        guard let last = turns.indices.last, !turns[last].isComplete else { return }
-        turns[last].error = message
-        turns[last].isComplete = true
+        guard let last = turns.indices.last else { return }
+        turns[last].content.fail(message)
     }
 
     /// True while a reply is still arriving.

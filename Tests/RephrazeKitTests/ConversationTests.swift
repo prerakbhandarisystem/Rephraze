@@ -143,9 +143,9 @@ struct ConversationTests {
         #expect(conversation.latestRewrite == "Quoted for no reason.")
     }
 
-    /// The round stays open so the failure can still be written into it -- see
-    /// `Conversation.complete`.
-    @Test("A reply of pure whitespace does not close the round")
+    /// It closes, but with nothing usable in it -- so `fail` is still allowed to
+    /// write the reason into that round rather than being locked out by it.
+    @Test("A reply of pure whitespace is not something to paste")
     func emptyRepliesAreNotApplicable() {
         var conversation = Conversation(original: "the text")
         conversation.ask("Shorter")
@@ -153,11 +153,24 @@ struct ConversationTests {
         conversation.complete()
 
         #expect(conversation.latestRewrite == nil)
-        #expect(conversation.isAnswering)
         #expect(roles(conversation) == ["system", "user", "user"])
 
         conversation.fail("OpenAI returned nothing.")
         #expect(conversation.turns.last?.error == "OpenAI returned nothing.")
+    }
+
+    /// The other half of that rule: a round that produced something good is
+    /// never overwritten by a late failure.
+    @Test("A good answer is not clobbered by a failure after it")
+    func failureNeverOverwritesGoodText() {
+        var conversation = Conversation(original: "the text")
+        conversation.ask("Shorter")
+        conversation.append("a real answer")
+        conversation.complete()
+        conversation.fail("Network went away.")
+
+        #expect(conversation.latestRewrite == "a real answer")
+        #expect(conversation.turns.last?.error == nil)
     }
 
     @Test("Text arriving after a round closed is ignored")

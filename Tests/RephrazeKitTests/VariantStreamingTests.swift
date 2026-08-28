@@ -87,7 +87,7 @@ struct PanelStreamingTests {
     func partialNotChoosable() {
         let m = model()
         var chosen: String?
-        m.onChoose = { _, text in chosen = text }
+        m.onApply = { _, text in chosen = text }
 
         m.append("half a sen", to: .polished)
         m.choose(.polished)
@@ -101,8 +101,8 @@ struct PanelStreamingTests {
     @Test("Digit N maps to the Nth variant regardless of arrival order")
     func digitsAreStable() {
         let m = model()
-        var chosen: RephraseVariant?
-        m.onChoose = { variant, _ in chosen = variant }
+        var chosen: String?
+        m.onApply = { label, _ in chosen = label }
 
         // Third variant lands first.
         m.append("formal text", to: .professional)
@@ -110,7 +110,7 @@ struct PanelStreamingTests {
 
         // Pressing 3 still picks it, not 1.
         m.chooseByDigit(3)
-        #expect(chosen == .professional)
+        #expect(chosen == RephraseVariant.professional.title)
 
         // And 1 does nothing, because polished has not arrived.
         chosen = nil

@@ -23,7 +23,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingField: FocusedField?
     private var pendingWasSelection = false
     private var pendingOriginal = ""
-    private var pendingRecordID: UUID?
     /// When the rephrase currently on screen began, or nil once its outcome has
     /// been recorded. Doubles as the "still undecided" flag, so dismissing can
     /// tell a cancelled rewrite from one that was already applied.
@@ -52,21 +51,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         telemetry.record(.launched)
         onboarding.onGranted = { [weak self] in self?.startListening() }
 
-        panel.model.onChoose = { [weak self] variant, text in
-            self?.apply(label: variant.title, text: text)
-        }
-        panel.model.onChoosePersonal = { [weak self] text in
-            self?.apply(label: "your style", text: text)
+        panel.model.onApply = { [weak self] label, text in
+            self?.apply(label: label, text: text)
         }
         panel.model.onChooseLanguage = { [weak self] language in
             self?.translate(into: language)
-        }
-        panel.model.onChooseTranslation = { [weak self] text in
-            guard let self else { return }
-            self.apply(label: self.panel.model.activeLanguage?.title ?? "translation", text: text)
-        }
-        panel.model.onChooseRefined = { [weak self] text in
-            self?.apply(label: "your version", text: text)
         }
         panel.model.onStateChange = { [weak self] in self?.syncPanelDigits() }
         panel.model.onRequestEditing = { [weak self] in self?.beginEditing() }
@@ -261,6 +250,49 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Rephrase
 
+    /// Read one streamed rewrite into the panel.
+    ///
+    /// The three single-answer paths -- styled, translated, refined -- differ
+    /// only in which stream they read, where the text lands, and what to do
+    /// when it ends. Everything around that is identical: the cancellation
+    /// check on each chunk, the second one after the loop, treating a cancel as
+    /// silence rather than an error, and timing the first visible word. That
+    /// was written out three times, which is three copies of the cancellation
+    /// handling to get subtly wrong.
+    @MainActor
+    private func stream(
+        _ deltas: AsyncThrowingStream<String, Error>,
+        startedAt started: Date,
+        into append: @escaping @MainActor (String) -> Void,
+        onFinish finish: @escaping @MainActor () -> Void,
+        onFailure fail: @escaping @MainActor (String) -> Void
+    ) {
+        activeRephrase = Task { @MainActor in
+            var sawText = false
+            do {
+                for try await delta in deltas {
+                    if Task.isCancelled { return }
+                    if !sawText {
+                        sawText = true
+                        // Time to first visible word -- the number that decides
+                        // whether this feels fast.
+                        Log.rewrite.notice(
+                            "First text after \(Int(Date().timeIntervalSince(started) * 1000))ms"
+                        )
+                    }
+                    append(delta)
+                }
+                guard !Task.isCancelled else { return }
+                finish()
+            } catch is CancellationError {
+                return
+            } catch {
+                fail(error.localizedDescription)
+            }
+        }
+    }
+
+
     /// Ask for four rewrites, show them, and wait for a choice.
     private func rephrase(_ capture: CapturedText) {
         guard let apiKey = Keychain.readAPIKey() else {
@@ -275,7 +307,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingField = capture.field
         pendingWasSelection = capture.wasSelection
         pendingOriginal = capture.text
-        pendingRecordID = nil
         rephraseStartedAt = Date()
 
         // Only one in flight. A second trigger replaces the first rather than
@@ -299,33 +330,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             let style = Settings.style
             panel.model.beginPersonal(original: original)
 
-            activeRephrase = Task { [weak self] in
-                guard let self else { return }
-                var sawText = false
-                do {
-                    for try await delta in openAI.rephrasePersonal(
-                        text: original, style: style, model: model, apiKey: apiKey
-                    ) {
-                        if Task.isCancelled { return }
-                        if !sawText {
-                            sawText = true
-                            Log.rewrite.notice(
-                                "First text after \(Int(Date().timeIntervalSince(started) * 1000))ms"
-                            )
-                        }
-                        await self.panel.model.appendPersonal(delta)
-                    }
-
-                    guard !Task.isCancelled else { return }
-                    await self.finishPersonal(
+            stream(
+                openAI.rephrasePersonal(
+                    text: original, style: style, model: model, apiKey: apiKey
+                ),
+                startedAt: started,
+                into: { [weak self] in self?.panel.model.appendPersonal($0) },
+                onFinish: { [weak self] in
+                    self?.finishPersonal(
                         original: original, appName: appName, started: started
                     )
-                } catch is CancellationError {
-                    return
-                } catch {
-                    await self.showFailure(error.localizedDescription)
-                }
-            }
+                },
+                onFailure: { [weak self] in self?.showFailure($0) }
+            )
             return
         }
 
@@ -399,7 +416,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func finishPersonal(original: String, appName: String, started: Date) {
         panel.model.completePersonal()
 
-        guard panel.model.personalIsChoosable else {
+        guard panel.model.personal.isChoosable else {
             showFailure("OpenAI returned nothing.")
             return
         }
@@ -412,7 +429,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenu.setLastCapture(
             summary: "Ready in your style — press 1",
-            preview: Self.preview(of: panel.model.personalText)
+            preview: Self.preview(of: panel.model.personal.text)
         )
     }
 
@@ -585,23 +602,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let model = Settings.model
         let started = Date()
 
-        activeRephrase = Task { [weak self] in
-            guard let self else { return }
-            do {
-                for try await delta in openAI.refine(
-                    conversation: conversation, style: style, model: model, apiKey: apiKey
-                ) {
-                    if Task.isCancelled { return }
-                    await self.panel.model.appendChat(delta)
-                }
-                guard !Task.isCancelled else { return }
-                await self.finishRefinement(appName: appName, started: started)
-            } catch is CancellationError {
-                return
-            } catch {
-                await self.failRefinement(error.localizedDescription)
-            }
-        }
+        stream(
+            openAI.refine(
+                conversation: conversation, style: style, model: model, apiKey: apiKey
+            ),
+            startedAt: started,
+            into: { [weak self] in self?.panel.model.appendChat($0) },
+            onFinish: { [weak self] in
+                self?.finishRefinement(appName: appName, started: started)
+            },
+            // Not showFailure: a failed round must not replace the transcript.
+            onFailure: { [weak self] in self?.failRefinement($0) }
+        )
     }
 
     /// One round of the conversation finished streaming.
@@ -661,33 +673,24 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         activeRephrase?.cancel()
         panel.model.beginTranslating(into: language)
 
-        activeRephrase = Task { [weak self] in
-            guard let self else { return }
-            do {
-                for try await delta in openAI.translate(
-                    text: original, to: language, model: model, apiKey: apiKey
-                ) {
-                    if Task.isCancelled { return }
-                    await self.panel.model.appendTranslation(delta)
-                }
-
-                guard !Task.isCancelled else { return }
-                await self.finishTranslation(
+        stream(
+            openAI.translate(text: original, to: language, model: model, apiKey: apiKey),
+            startedAt: started,
+            into: { [weak self] in self?.panel.model.appendTranslation($0) },
+            onFinish: { [weak self] in
+                self?.finishTranslation(
                     language: language, appName: appName, started: started
                 )
-            } catch is CancellationError {
-                return
-            } catch {
-                await self.showFailure(error.localizedDescription)
-            }
-        }
+            },
+            onFailure: { [weak self] in self?.showFailure($0) }
+        )
     }
 
     @MainActor
     private func finishTranslation(language: TargetLanguage, appName: String, started: Date) {
         panel.model.completeTranslation()
 
-        guard panel.model.translationIsChoosable else {
+        guard panel.model.translation.isChoosable else {
             showFailure("OpenAI returned nothing.")
             return
         }
@@ -700,7 +703,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenu.setLastCapture(
             summary: "Ready in \(language.title) — press 1",
-            preview: Self.preview(of: panel.model.translationText)
+            preview: Self.preview(of: panel.model.translation.text)
         )
     }
 

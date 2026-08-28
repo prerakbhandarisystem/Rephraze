@@ -16,7 +16,6 @@ public enum PasteboardBridge {
     }
 
     private static let vKeyCode: CGKeyCode = 9
-    private static let cKeyCode: CGKeyCode = 8
 
     // MARK: - Save and restore
 
@@ -69,7 +68,6 @@ public enum PasteboardBridge {
 
     // MARK: - Synthetic keystrokes
 
-    public static func sendCopy() { send(keyCode: cKeyCode) }
     public static func sendPaste() { send(keyCode: vKeyCode) }
 
     private static func send(keyCode: CGKeyCode) {

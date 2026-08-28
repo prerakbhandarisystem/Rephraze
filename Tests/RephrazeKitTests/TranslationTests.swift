@@ -182,11 +182,11 @@ struct TranslationStateTests {
         model.beginTranslating(into: .spanish)
         model.appendTranslation("Hola, ¿podemos")
 
-        #expect(!model.translationIsChoosable)
+        #expect(!model.translation.isChoosable)
         #expect(model.activeLanguage == .spanish)
 
         model.completeTranslation()
-        #expect(model.translationIsChoosable)
+        #expect(model.translation.isChoosable)
     }
 
     @Test("Only 1 applies it -- there is nothing else on screen")
@@ -197,7 +197,7 @@ struct TranslationStateTests {
         model.completeTranslation()
 
         var applied: String?
-        model.onChooseTranslation = { applied = $0 }
+        model.onApply = { _, text in applied = text }
 
         model.chooseByDigit(2)
         #expect(applied == nil)
@@ -214,7 +214,7 @@ struct TranslationStateTests {
         model.appendTranslation("\"Können wir den Termin verschieben?\"")
         model.completeTranslation()
 
-        #expect(model.translationText == "Können wir den Termin verschieben?")
+        #expect(model.translation.text == "Können wir den Termin verschieben?")
     }
 
     @Test("The original survives a translation started from the single-call path")
@@ -261,8 +261,8 @@ struct TranslationStateTests {
         model.completeTranslation()
 
         model.beginTranslating(into: .arabic)
-        #expect(model.translationText.isEmpty)
-        #expect(!model.translationComplete)
+        #expect(model.translation.text.isEmpty)
+        #expect(!model.translation.isComplete)
         #expect(model.activeLanguage == .arabic)
     }
 }
