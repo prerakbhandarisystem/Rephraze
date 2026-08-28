@@ -44,7 +44,7 @@ public enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .general: return "Key, model and speed"
         case .style:   return "Teach it how you write"
         case .history: return "What it has rewritten"
-        case .usage:   return "Anonymous reporting, off by default"
+        case .usage:   return "Anonymous, off by default"
         case .support: return "Report a problem"
         }
     }

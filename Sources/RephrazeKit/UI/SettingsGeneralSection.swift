@@ -94,26 +94,9 @@ struct GeneralTab: View {
                     .foregroundStyle(.secondary)
                 }
 
-                Section {
-                    Toggle(
-                        "Keep a record of every rephrase",
-                        isOn: Binding(
-                            get: { model.historyEnabled },
-                            set: model.setHistoryEnabled
-                        )
-                    )
-                } header: {
-                    Text("History")
-                } footer: {
-                    Text("""
-                        Stays on this Mac, readable only by you. Bear in mind this file \
-                        records text you typed in other apps.
-                        """)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
             }
             .formStyle(.grouped)
+            .settingsContentBackground()
 
             Divider()
 

@@ -101,6 +101,7 @@ struct UsageTab: View {
                 }
             }
             .formStyle(.grouped)
+            .settingsContentBackground()
 
             Divider()
 

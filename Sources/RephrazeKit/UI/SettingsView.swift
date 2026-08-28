@@ -22,13 +22,23 @@ public struct SettingsView: View {
     public var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 208, ideal: 224, max: 280)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 244, max: 300)
         } detail: {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Behind every section, including the ones that are a plain
+                // ScrollView rather than a Form.
+                .background(SettingsPalette.content)
         }
         .navigationTitle(model.selectedSection.title)
         .frame(minWidth: 860, minHeight: 560)
+        // Fixed cream, so the contents must be dark-on-light whatever the
+        // system appearance is set to -- the same bargain the result panel
+        // makes, and for the same reason.
+        .environment(\.colorScheme, .light)
+        // The mark's indigo, so selection in here matches the panel and the
+        // icon rather than whatever accent the system is set to.
+        .tint(PanelPalette.accent)
     }
 
     // MARK: - Sidebar
@@ -39,38 +49,53 @@ public struct SettingsView: View {
                 Label {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(section.title)
-                            .font(.system(size: 13))
+                            .font(.system(size: 14))
                         Text(section.summary)
-                            .font(.system(size: 10.5))
+                            .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                 } icon: {
                     Image(systemName: section.symbol)
-                        .font(.system(size: 13))
-                        .frame(width: 18)
+                        .font(.system(size: 16))
+                        .frame(width: 22)
                 }
-                .padding(.vertical, 3)
+                .padding(.vertical, 5)
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
-            // The app's own identity, and the one control that is not part of
-            // any single section.
-            HStack(spacing: 8) {
-                RephrazeMarkView(size: 15)
+        .scrollContentBackground(.hidden)
+        .safeAreaInset(edge: .top) {
+            // The mark leads the window rather than closing it. At the bottom
+            // it read as a footer -- a version stamp you notice on the way out.
+            // At the top it is the app introducing itself, which is what a mark
+            // is for, and it gives the sidebar a head where the sections start
+            // flush against the title bar otherwise.
+            HStack(spacing: 11) {
+                // Mark and wordmark at roughly the same height, which is what
+                // makes a lockup read as one thing rather than an icon with a
+                // caption beside it.
+                RephrazeMarkView(size: 30)
                     .foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Rephraze")
-                        .font(.system(size: 11, weight: .semibold))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(AppInfo.name)
+                        .font(.system(size: 21, weight: .semibold))
+                        .tracking(-0.3)
+                    // Secondary rather than tertiary: tertiary is faint enough
+                    // on a sidebar's translucent background that the version
+                    // has to be hunted for, which defeats printing it.
                     Text("Version \(AppInfo.version)")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.top, 16)
+            .padding(.bottom, 14)
         }
+        // Applied after the inset so the lockup sits on the same tone as the
+        // list rather than on a lighter strip above it.
+        .background(SettingsPalette.sidebar)
     }
 
     // MARK: - Detail

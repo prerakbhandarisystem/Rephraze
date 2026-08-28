@@ -62,6 +62,7 @@ struct SupportTab: View {
                 }
             }
             .formStyle(.grouped)
+            .settingsContentBackground()
 
             Divider()
 

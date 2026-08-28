@@ -14,9 +14,9 @@ fileprivate struct PanelCardSurface: ViewModifier {
     enum Density {
         case standard, compact
 
-        var horizontal: CGFloat { self == .standard ? 13 : 10 }
-        var vertical: CGFloat { self == .standard ? 11 : 8 }
-        var radius: CGFloat { self == .standard ? 12 : 10 }
+        var horizontal: CGFloat { self == .standard ? 15 : 11 }
+        var vertical: CGFloat { self == .standard ? 13 : 9 }
+        var radius: CGFloat { self == .standard ? 13 : 11 }
     }
 
     var isHovered: Bool
@@ -30,10 +30,14 @@ fileprivate struct PanelCardSurface: ViewModifier {
             .padding(.vertical, density.vertical)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background { shape.fill(isHovered ? PanelPalette.cardHover : PanelPalette.card) }
+            // No outline at rest. The card is a step darker than the surface
+            // and that step is enough -- an outline round every row turns a
+            // list of four sentences into a form with four boxes on it. The
+            // accent edge comes back on hover, where it is doing real work.
             .overlay {
                 shape.strokeBorder(
-                    isHovered ? PanelPalette.accent.opacity(0.45) : PanelPalette.hairline,
-                    lineWidth: isHovered ? 1 : 0.5
+                    isHovered ? PanelPalette.accent.opacity(0.45) : .clear,
+                    lineWidth: isHovered ? 1 : 0
                 )
             }
             // An accent rail on the hovered row. A tint alone is easy to miss
@@ -80,19 +84,28 @@ extension View {
 /// every control inside -- including ones this file does not own -- resolves to
 /// dark-on-light rather than the reverse.
 enum PanelPalette {
-    /// The panel itself. Very slightly warm; pure #FFF next to macOS chrome
-    /// reads as a hole rather than a surface.
-    static let surface = Color(red: 0.996, green: 0.996, blue: 1.0)
-    /// Cards sitting on the surface.
-    static let card = Color(red: 0.969, green: 0.969, blue: 0.980)
-    static let cardHover = Color(red: 0.945, green: 0.945, blue: 0.988)
-    static let hairline = Color(red: 0.886, green: 0.886, blue: 0.906)
+    /// The panel itself: warm off-white, not white.
+    ///
+    /// Every value below has red > green > blue. That ordering is the whole
+    /// point and it is easy to lose -- the previous palette described itself as
+    /// warm while having blue at 1.0 and red at 0.996, which is cool by a hair.
+    /// A paper-warm surface reads as a considered object; a cool one reads as
+    /// an untinted default, and next to macOS chrome it reads as a hole.
+    static let surface = Color(red: 0.992, green: 0.988, blue: 0.980)
+    /// Cards sitting on the surface. Close to it on purpose -- the step between
+    /// the two is what separates them, so the cards need no outline.
+    static let card = Color(red: 0.961, green: 0.949, blue: 0.933)
+    /// Hover reaches for the accent rather than just going darker, so the row
+    /// under the pointer is warm-lilac instead of grubby.
+    static let cardHover = Color(red: 0.945, green: 0.937, blue: 0.953)
+    static let hairline = Color(red: 0.906, green: 0.890, blue: 0.867)
 
     /// Body text. Near-black rather than black: pure #000 on white is harsh
-    /// over a long paragraph, which is exactly what this panel shows.
-    static let text = Color(red: 0.106, green: 0.110, blue: 0.129)
-    static let secondary = Color(red: 0.376, green: 0.388, blue: 0.427)
-    static let tertiary = Color(red: 0.549, green: 0.561, blue: 0.600)
+    /// over a long paragraph, which is exactly what this panel shows. Warm to
+    /// match the surface -- cool grey on cream looks like a rendering fault.
+    static let text = Color(red: 0.114, green: 0.106, blue: 0.094)
+    static let secondary = Color(red: 0.412, green: 0.392, blue: 0.361)
+    static let tertiary = Color(red: 0.600, green: 0.576, blue: 0.541)
 
     /// The indigo from the app icon, so panel and icon are one product.
     static let accent = Color(red: 0.361, green: 0.353, blue: 0.855)
@@ -144,19 +157,26 @@ struct ResultPanelView: View {
         }
         .frame(width: panelWidth)
         .background {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(PanelPalette.surface)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(PanelPalette.hairline, lineWidth: 1)
+            // Half a point, not one. The shadow already says where the panel
+            // ends; the outline is only here for the case where it lands on
+            // something dark, and a full point of it reads as a drawn box.
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(PanelPalette.hairline.opacity(0.8), lineWidth: 0.5)
         }
         // Layered shadow: a tight contact shadow under a wide soft one. On an
-        // opaque white panel this is the only thing separating it from a white
-        // window behind it, so it does more work here than it did before.
-        .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
-        .shadow(color: .black.opacity(0.20), radius: 36, y: 16)
+        // opaque panel this is the only thing separating it from a white window
+        // behind it, so it does more work here than it did before.
+        //
+        // Wider and lighter than it was. A short dense shadow reads as a box
+        // sitting on the screen; a long faint one reads as a surface floating
+        // above it, which is the difference being aimed at.
+        .shadow(color: .black.opacity(0.07), radius: 3, y: 1)
+        .shadow(color: .black.opacity(0.15), radius: 52, y: 22)
         // Everything inside is dark-on-light regardless of system appearance.
         .environment(\.colorScheme, .light)
         .tint(PanelPalette.accent)
